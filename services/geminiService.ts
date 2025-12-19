@@ -22,9 +22,9 @@ interface AnalyzeParams {
 }
 
 const commonHeaders = {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${supabaseAnonKey}`,
-    'apikey': supabaseAnonKey,
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${supabaseAnonKey}`,
+  'apikey': supabaseAnonKey,
 };
 const functionUrl = `${supabaseUrl}/functions/v1/audit`;
 
@@ -46,10 +46,10 @@ const processSingleAnalysisStream = async (
     });
 
     if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Analysis request failed for ${expertName}: ${response.status} ${errorText}`);
+      const errorText = await response.text();
+      throw new Error(`Analysis request failed for ${expertName}: ${response.status} ${errorText}`);
     }
-    
+
     if (!response.body) {
       throw new Error(`Response body is null for ${expertName} analysis.`);
     }
@@ -112,45 +112,45 @@ export const analyzeWebsiteStream = async (
     let successfulCaptures = 0;
 
     for (let i = 0; i < captureTasks.length; i++) {
-        const task = captureTasks[i];
-        const device = task.isMobile ? 'mobile' : 'desktop';
-        const pageName = new URL(task.url).pathname;
-        onStatus(`Capture task ${i + 1}/${captureTasks.length}: ${pageName} (${device})`);
+      const task = captureTasks[i];
+      const device = task.isMobile ? 'mobile' : 'desktop';
+      const pageName = new URL(task.url).pathname;
+      onStatus(`Capture task ${i + 1}/${captureTasks.length}: ${pageName} (${device})`);
 
-        try {
-            const response = await fetch(functionUrl, {
-              method: 'POST',
-              headers: commonHeaders,
-              body: JSON.stringify({ ...task, mode: 'scrape-single-page' }),
-            });
+      try {
+        const response = await fetch(functionUrl, {
+          method: 'POST',
+          headers: commonHeaders,
+          body: JSON.stringify({ ...task, mode: 'scrape-single-page' }),
+        });
 
-            if (!response.ok) {
-              const errorText = await response.text();
-              throw new Error(`Capture failed for ${task.url} (${device}): ${response.status} ${errorText}`);
-            }
-            
-            const result = await response.json();
-            const { screenshot, liveText, animationData: ad, accessibilityData: accD } = result;
-
-            allScreenshots.push(screenshot);
-            // Only aggregate text from desktop captures to avoid duplication
-            if (!screenshot.isMobile && liveText) {
-                aggregatedLiveText += `\n\n--- START CONTENT FROM ${screenshot.path} ---\n${liveText}\n--- END CONTENT FROM ${screenshot.path} ---\n\n`;
-            }
-            if (ad) animationData = ad;
-            if (accD) accessibilityData = accD;
-            successfulCaptures++;
-
-        } catch (error) {
-            console.warn(error.message);
-            onStatus(`⚠️ Task ${i + 1}/${captureTasks.length} failed. Skipping.`);
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Capture failed for ${task.url} (${device}): ${response.status} ${errorText}`);
         }
+
+        const result = await response.json();
+        const { screenshot, liveText, animationData: ad, accessibilityData: accD } = result;
+
+        allScreenshots.push(screenshot);
+        // Only aggregate text from desktop captures to avoid duplication
+        if (!screenshot.isMobile && liveText) {
+          aggregatedLiveText += `\n\n--- START CONTENT FROM ${screenshot.path} ---\n${liveText}\n--- END CONTENT FROM ${screenshot.path} ---\n\n`;
+        }
+        if (ad) animationData = ad;
+        if (accD) accessibilityData = accD;
+        successfulCaptures++;
+
+      } catch (error) {
+        console.warn(error.message);
+        onStatus(`⚠️ Task ${i + 1}/${captureTasks.length} failed. Skipping.`);
+      }
     }
-    
+
     if (successfulCaptures === 0) {
       throw new Error("Scraping failed for all provided URLs. Cannot proceed with audit.");
     }
-    
+
     onStatus(`✓ Capture complete. ${successfulCaptures}/${captureTasks.length} tasks succeeded.`);
 
     // Performance check is only done on the main URL
@@ -178,89 +178,98 @@ export const analyzeWebsiteStream = async (
       animationData,
       accessibilityData,
     };
-    
+
     const { screenshots, liveText, performanceData, screenshotMimeType, performanceAnalysisError } = scrapedData;
-    
+
     onScrapeComplete(screenshots, screenshotMimeType);
     if (performanceAnalysisError && onPerformanceError) {
-        onPerformanceError(performanceAnalysisError);
+      onPerformanceError(performanceAnalysisError);
     }
 
 
     if (!liveText || liveText.trim().length < 50) {
-        throw new Error("Scraping succeeded, but could not extract sufficient text content from the page. The page might be empty or a single-page application that requires more interaction to load fully.");
+      throw new Error("Scraping succeeded, but could not extract sufficient text content from the page. The page might be empty or a single-page application that requires more interaction to load fully.");
     }
     onStatus('✓ Website content aggregated. Beginning AI analysis...');
-    
+
     const primaryScreenshot = screenshots.find(s => s.path === new URL(primaryUrl).pathname && !s.isMobile);
     const primaryMobileScreenshot = screenshots.find(s => s.path === new URL(primaryUrl).pathname && s.isMobile);
 
-    // --- Phase 2: Analyze Data (Parallel Experts) ---
+    // --- Phase 2: Analyze Data (Sequential to prevent network congestion) ---
     const analysisExperts: ExpertKey[] = [
-        'Strategy Audit expert',
-        'UX Audit expert',
-        'Product Audit expert',
-        'Visual Audit expert',
+      'Strategy Audit expert',
+      'UX Audit expert',
+      'Product Audit expert',
+      'Visual Audit expert',
     ];
 
-    const analysisPromises = analysisExperts.map(expertKey => {
-        const expertShortName = expertKey.split(' ')[0].toLowerCase();
-        const mode = `analyze-${expertShortName}`;
-        const analysisBody = { 
-            url: primaryUrl, 
-            screenshotBase64: primaryScreenshot?.data, 
-            mobileScreenshotBase64: primaryMobileScreenshot?.data, 
-            liveText, 
-            performanceData, 
-            screenshotMimeType, 
-            performanceAnalysisError, 
-            animationData, 
-            accessibilityData,
-            mode,
-        };
-        return processSingleAnalysisStream(analysisBody, expertKey, callbacks, finalReport);
-    });
+    for (const expertKey of analysisExperts) {
+      const expertShortName = expertKey.split(' ')[0].toLowerCase();
+      const mode = `analyze-${expertShortName}`;
+      const analysisBody = {
+        url: primaryUrl,
+        screenshotBase64: primaryScreenshot?.data,
+        mobileScreenshotBase64: primaryMobileScreenshot?.data,
+        liveText,
+        performanceData,
+        screenshotMimeType,
+        performanceAnalysisError,
+        animationData,
+        accessibilityData,
+        mode,
+      };
 
-    await Promise.all(analysisPromises);
+      try {
+        // Add a small delay to avoid overloading the AI provider (Rate Limit mitigation)
+        if (expertKey !== analysisExperts[0]) {
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+        await processSingleAnalysisStream(analysisBody, expertKey, callbacks, finalReport);
+      } catch (error) {
+        console.error(`Analysis failed for ${expertKey}:`, error);
+        // We continue to the next expert even if one fails
+        onStatus(`⚠️ ${expertKey.split(' ')[0]} analysis skipped due to error.`);
+      }
+    }
 
 
     // --- Phase 2.5: Contextual Ranking of Issues ---
     onStatus('Analyzing issues for strategic impact...');
     try {
-        const contextualRankResponse = await fetch(functionUrl, {
-            method: 'POST',
-            headers: commonHeaders,
-            body: JSON.stringify({ report: finalReport, mode: 'contextual-rank' }),
-        });
+      const contextualRankResponse = await fetch(functionUrl, {
+        method: 'POST',
+        headers: commonHeaders,
+        body: JSON.stringify({ report: finalReport, mode: 'contextual-rank' }),
+      });
 
-        if (!contextualRankResponse.ok) {
-            const errorText = await contextualRankResponse.text();
-            console.warn(`Contextual ranking failed: ${errorText}. Falling back to default sorting.`);
-        } else {
-            const contextualIssues = await contextualRankResponse.json();
-            onData({ key: 'Top5ContextualIssues', data: contextualIssues });
-        }
+      if (!contextualRankResponse.ok) {
+        const errorText = await contextualRankResponse.text();
+        console.warn(`Contextual ranking failed: ${errorText}. Falling back to default sorting.`);
+      } else {
+        const contextualIssues = await contextualRankResponse.json();
+        onData({ key: 'Top5ContextualIssues', data: contextualIssues });
+      }
     } catch (e) {
-        console.warn(`Contextual ranking request failed: ${e.message}. Falling back to default sorting.`);
+      console.warn(`Contextual ranking request failed: ${e.message}. Falling back to default sorting.`);
     }
 
     onStatus('✓ All analyses complete. Finalizing report...');
 
     // --- Phase 3: Finalize Report ---
     const finalizeResponse = await fetch(functionUrl, {
-        method: 'POST',
-        headers: commonHeaders,
-        body: JSON.stringify({ 
-            report: finalReport, 
-            screenshots: allScreenshots,
-            url: primaryUrl,
-            mode: 'finalize' 
-        }),
+      method: 'POST',
+      headers: commonHeaders,
+      body: JSON.stringify({
+        report: finalReport,
+        screenshots: allScreenshots,
+        url: primaryUrl,
+        mode: 'finalize'
+      }),
     });
 
     if (!finalizeResponse.ok) {
-        const errorText = await finalizeResponse.text();
-        throw new Error(`Failed to finalize report: ${finalizeResponse.status} ${errorText}`);
+      const errorText = await finalizeResponse.text();
+      throw new Error(`Failed to finalize report: ${finalizeResponse.status} ${errorText}`);
     }
 
     const finalData: CompleteChunk['payload'] = await finalizeResponse.json();

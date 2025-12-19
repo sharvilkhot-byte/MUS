@@ -6,7 +6,7 @@ import { encode, decode } from "https://deno.land/std@0.208.0/encoding/base64.ts
 declare const Deno: any;
 
 // --- START PROMPTS (Refactored for Lazy Loading) ---
-const getWebsiteContextPrompt = (url: string, performanceData: any, performanceAnalysisError: any, animationData: any, accessibilityData: any, isMultiPage = false)=>{
+const getWebsiteContextPrompt = (url: string, performanceData: any, performanceAnalysisError: any, animationData: any, accessibilityData: any, isMultiPage = false) => {
   let prompt = `
 ### Website Context ###
 - Website URL: ${url}
@@ -40,7 +40,7 @@ ${isMultiPage ? '- Note: This audit is based on a crawl of multiple pages. The p
 `;
     if (animationData.length > 0) {
       prompt += `The following elements were found to have CSS properties suggesting motion. Analyze these to infer the quality and purpose of the site's animations.
-${animationData.map((item: any)=>`- ${item}`).join('\n')}
+${animationData.map((item: any) => `- ${item}`).join('\n')}
 `;
     } else {
       prompt += `No significant CSS animations or transitions were automatically detected on the page. This analysis will be based on the static screenshot.
@@ -60,7 +60,7 @@ This data was extracted from the page's HTML and indicates potential accessibili
   return prompt;
 };
 
-const getIndividualExpertSystemInstruction = (expertRole: string, mobileCaptureSucceeded: boolean, isMultiPage: boolean)=>{
+const getIndividualExpertSystemInstruction = (expertRole: string, mobileCaptureSucceeded: boolean, isMultiPage: boolean) => {
   const instructions = [
     "**Infer Context**: Your first step is to analyze the provided text and screenshots to infer the website's type (e.g., SaaS, E-commerce, Portfolio) and primary purpose. Use this inferred context to guide the rest of your audit.",
     "**Dynamic Parameter Relevance**: First, analyze the website context. For each parameter in the schema, determine if it is relevant. If a parameter is NOT APPLICABLE (e.g., 'CheckoutPaymentFlow' for a portfolio site), you MUST assign it a `Score` of `0` and the `Analysis` field MUST briefly explain why it's not relevant (e.g., 'Not applicable as this is not an e-commerce site.'). Do not omit the parameter object.",
@@ -90,7 +90,7 @@ const getIndividualExpertSystemInstruction = (expertRole: string, mobileCaptureS
       instructions.push("**Mobile Analysis Inferred**: The automated capture of the mobile screenshot FAILED. You must base your analysis for the 'MobileOptimization' parameter on an *inferential* review of the desktop screenshot only. Look for signs of a responsive design (e.g., fluid layouts, use of relative units, lack of fixed-width elements). Your analysis must explicitly state that the mobile screenshot was not available. Your citation should reflect this, for example: \"Based on the fluid layout seen on desktop, the site appears to be responsive, but this could not be visually confirmed.\"");
     }
   }
-  const numberedInstructions = instructions.map((inst, index)=>`${index + 1}. ${inst}`).join('\n');
+  const numberedInstructions = instructions.map((inst, index) => `${index + 1}. ${inst}`).join('\n');
   return `
 You are an expert ${expertRole}. Your task is to conduct a comprehensive audit of the provided website based on its screenshot(s) and text content. You must fill out all sections in the requested JSON schema completely and critically.
 
@@ -106,7 +106,7 @@ ${numberedInstructions}
 `;
 };
 
-const getStrategySystemInstruction = ()=>`
+const getStrategySystemInstruction = () => `
   ### Role ###
   You are an advanced UX auditor and domain analyst. Your task is to analyze the provided text to determine strategic insights. Your analysis MUST be based exclusively on the provided "Live Website Text Content". Do not use your internal knowledge of the website.
 
@@ -117,7 +117,7 @@ const getStrategySystemInstruction = ()=>`
   After completing the strategic analysis (Domain, Purpose, Target Audience), you MUST generate 3 realistic user personas based on your findings. Fill out all fields for each persona. For each persona, keep the \`UserNeedsBehavior\` and \`PainPointOpportunity\` descriptions to 3-4 concise sentences to ensure the report can be saved successfully.
 `;
 
-const getSchemas = ()=>{
+const getSchemas = () => {
   const criticalIssueSchema = {
     type: Type.OBJECT,
     properties: {
@@ -133,7 +133,7 @@ const getSchemas = ()=>{
     },
     required: ['Issue', 'ImpactLevel', 'Score', 'Recommendation', 'Citations', 'source', 'Confidence', 'Analysis', 'KeyFinding']
   };
-  
+
   const criticalIssueSchemaForExperts = {
     type: Type.OBJECT,
     properties: {
@@ -296,19 +296,20 @@ const COMMON_HEADERS = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS'
 };
-const sleep = (ms: number)=>new Promise((resolve)=>setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // Helper to extract specific wait time from error messages
 function getRetryDelay(error: any) {
   const text = error.message || JSON.stringify(error);
-  const match = text.match(/retry in (\d+(\.\d+)?)s/i);
+  // Look for "retry after X seconds" or standard headers in text representation
+  const match = text.match(/retry in (\d+(\.\d+)?)s/i) || text.match(/retry-after.*?(\d+)/i);
   if (match) {
     return parseFloat(match[1]) * 1000;
   }
   return null;
 }
-async function retryWithBackoff(operation: any, retries = 5, initialDelay = 5000, operationName = "AI Operation") {
+async function retryWithBackoff(operation: any, retries = 10, initialDelay = 1000, operationName = "AI Operation") {
   let attempt = 0;
-  while(true){
+  while (true) {
     try {
       attempt++;
       return await operation();
@@ -320,19 +321,31 @@ async function retryWithBackoff(operation: any, retries = 5, initialDelay = 5000
         console.error(`${operationName} failed permanently on attempt ${attempt}. Error: ${msg}`);
         throw error;
       }
-      // Determine wait time: Exponential backoff OR specific server instruction
-      let delay = initialDelay * Math.pow(2, attempt - 1);
+
+      // SUPABASE RECOMMENDED: Exponential Backoff with Jitter
+      const base = initialDelay;
+      const max = 60000; // Cap at 60s
+      // Calculate retry slot
+      const slot = Math.pow(2, attempt - 1);
+      const cap = Math.min(max, base * slot);
+      // Full Jitter: delay = random_between(0, cap)
+      // We ensure at least 'initialDelay' to avoid instant hammering
+      let delay = Math.floor(Math.random() * cap);
+      if (delay < initialDelay) delay = initialDelay + Math.random() * 1000;
+
+      // Check for specific server instruction (Retry-After)
       const serverDelay = getRetryDelay(error);
       if (serverDelay) {
-        delay = serverDelay + 1000; // Add 1s buffer to be safe
-        console.warn(`${operationName} hit rate limit. Server requested wait of ${serverDelay / 1000}s.`);
+        delay = serverDelay + 1000; // Add 1s buffer
+        console.warn(`${operationName} hit limit. Server requested wait of ${serverDelay / 1000}s.`);
       }
+
       console.warn(`${operationName} failed (Attempt ${attempt}/${retries}). Retrying in ${delay / 1000}s... Error: ${msg.substring(0, 150)}...`);
       await sleep(delay);
     }
   }
 }
-const callApi = async (ai: any, systemInstruction: string, contents: string, schema: any, imageBase64 = null, mimeType = 'image/png', mobileImageBase64 = null)=>{
+const callApi = async (ai: any, systemInstruction: string, contents: string, schema: any, imageBase64 = null, mimeType = 'image/png', mobileImageBase64 = null) => {
   const parts = [];
   if (imageBase64) {
     parts.push({
@@ -356,22 +369,23 @@ const callApi = async (ai: any, systemInstruction: string, contents: string, sch
   const requestContents = imageBase64 || mobileImageBase64 ? {
     parts
   } : contents;
-  const apiCall = ()=>ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: requestContents,
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json",
-        responseSchema: schema,
-        safetySettings: [
-          { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-          { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-          { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-          { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        ]
-      }
-    });
-  const response = await retryWithBackoff(apiCall, 5, 5000, "Generate Content");
+  const apiCall = () => ai.models.generateContent({
+    model: "gemini-1.5-flash", // Corrected model name
+    contents: requestContents,
+    config: {
+      systemInstruction,
+      responseMimeType: "application/json",
+      responseSchema: schema,
+      safetySettings: [
+        { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+        { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+        { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+        { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+      ]
+    }
+  });
+  // Increased retries to 10 significantly
+  const response = await retryWithBackoff(apiCall, 10, 2000, "Generate Content");
   try {
     const text = response.text;
     if (!text) throw new Error("Response text is undefined");
@@ -382,11 +396,11 @@ const callApi = async (ai: any, systemInstruction: string, contents: string, sch
     throw new Error(`The AI model returned a non-JSON response. Raw output: \n---\n${text ? text.trim() : 'undefined'}\n---`);
   }
 };
-const handleSingleAnalysisStream = (expertKey: string, analysisFn: any)=>{
+const handleSingleAnalysisStream = (expertKey: string, analysisFn: any) => {
   return new ReadableStream({
-    async start (controller) {
+    async start(controller) {
       const encoder = new TextEncoder();
-      const writeStream = (chunk: any)=>{
+      const writeStream = (chunk: any) => {
         try {
           controller.enqueue(encoder.encode(JSON.stringify(chunk) + '\n'));
         } catch (e) {
@@ -420,13 +434,13 @@ const handleSingleAnalysisStream = (expertKey: string, analysisFn: any)=>{
           type: 'error',
           message: `Error in ${expertKey}: ${errorMessage}`
         });
-      } finally{
+      } finally {
         controller.close();
       }
     }
   });
 };
-serve(async (req: any)=>{
+serve(async (req: any) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', {
       headers: COMMON_HEADERS
@@ -458,7 +472,7 @@ serve(async (req: any)=>{
   const ai = new GoogleGenAI({
     apiKey
   });
-  switch(mode){
+  switch (mode) {
     case 'scrape-single-page':
       {
         const { default: puppeteer } = await import("npm:puppeteer-core@^22.12.1");
@@ -488,13 +502,13 @@ serve(async (req: any)=>{
               timeout: 30000
             });
             // Scroll logic
-            await page.evaluate(async ()=>{
-              await new Promise<void>((resolve)=>{
+            await page.evaluate(async () => {
+              await new Promise<void>((resolve) => {
                 let totalHeight = 0;
                 const distance = 250;
                 const maxScrolls = 40;
                 let scrolls = 0;
-                const timer = setInterval(()=>{
+                const timer = setInterval(() => {
                   const scrollHeight = document.body.scrollHeight;
                   window.scrollBy(0, distance);
                   totalHeight += distance;
@@ -506,8 +520,8 @@ serve(async (req: any)=>{
                 }, 100);
               });
             });
-            await page.evaluate(()=>{
-              document.querySelectorAll('*').forEach((el: any)=>{
+            await page.evaluate(() => {
+              document.querySelectorAll('*').forEach((el: any) => {
                 const style = window.getComputedStyle(el);
                 if (style.position === 'fixed' || style.position === 'sticky') {
                   el.style.position = 'absolute';
@@ -525,18 +539,18 @@ serve(async (req: any)=>{
               data: encode(screenshotBuffer),
               isMobile
             };
-            const pageData = await page.evaluate((isFirstPageDesktop: boolean)=>{
+            const pageData = await page.evaluate((isFirstPageDesktop: boolean) => {
               const text = document.body.innerText;
               let animationData = null;
               let accessibilityData = null;
               if (isFirstPageDesktop) {
-                animationData = Array.from(document.querySelectorAll('*')).filter((el: any)=>{
+                animationData = Array.from(document.querySelectorAll('*')).filter((el: any) => {
                   const style = window.getComputedStyle(el);
                   return style.getPropertyValue('animation-name') !== 'none' || style.getPropertyValue('transition-property') !== 'all' && style.getPropertyValue('transition-property') !== '';
-                }).map((el: any)=>`${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}${el.className && typeof el.className === 'string' ? `.${el.className.split(' ').filter((c: any)=>c).join('.')}` : ''}`).slice(0, 20);
+                }).map((el: any) => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}${el.className && typeof el.className === 'string' ? `.${el.className.split(' ').filter((c: any) => c).join('.')}` : ''}`).slice(0, 20);
                 accessibilityData = {
                   imagesMissingAlt: Array.from(document.querySelectorAll('img:not([alt])')).length,
-                  inputsMissingLabels: Array.from(document.querySelectorAll('input:not([id]), textarea:not([id])')).filter((el: any)=>!el.closest('label')).length + Array.from(document.querySelectorAll('input[id], textarea[id]')).filter((el: any)=>!document.querySelector(`label[for="${el.id}"]`)).length,
+                  inputsMissingLabels: Array.from(document.querySelectorAll('input:not([id]), textarea:not([id])')).filter((el: any) => !el.closest('label')).length + Array.from(document.querySelectorAll('input[id], textarea[id]')).filter((el: any) => !document.querySelector(`label[for="${el.id}"]`)).length,
                   hasSemanticElements: !!document.querySelector('main, nav, header, footer, article, section, aside'),
                   hasAriaAttributes: !!document.querySelector('[role], [aria-label], [aria-labelledby], [aria-describedby]')
                 };
@@ -560,8 +574,8 @@ serve(async (req: any)=>{
           } catch (error: any) {
             console.error(`Failed to scrape ${url} (${isMobile ? 'mobile' : 'desktop'}): ${error.message}`);
             throw error;
-          } finally{
-            if (page) await page.close().catch((e)=>console.error("Failed to close page:", e));
+          } finally {
+            if (page) await page.close().catch((e) => console.error("Failed to close page:", e));
           }
         } catch (error: any) {
           console.error("Scraping process failed:", error);
@@ -575,7 +589,7 @@ serve(async (req: any)=>{
               'Content-Type': 'application/json'
             }
           });
-        } finally{
+        } finally {
           if (browser) await browser.disconnect();
         }
       }
@@ -661,7 +675,7 @@ serve(async (req: any)=>{
           }
         };
         const expertConfig = expertMap[mode];
-        const analysisFn = async ()=>{
+        const analysisFn = async () => {
           if (mode === 'analyze-strategy') {
             const { liveText } = body;
             return callApi(ai, getStrategySystemInstruction(), liveText, expertConfig.schema);
@@ -688,18 +702,18 @@ serve(async (req: any)=>{
         try {
           const { report } = body;
           const allIssues = [
-            ...report['UX Audit expert']?.Top5CriticalUXIssues?.map((i: any)=>({
-                ...i,
-                source: 'UX Audit'
-              })) || [],
-            ...report['Product Audit expert']?.Top5CriticalProductIssues?.map((i: any)=>({
-                ...i,
-                source: 'Product Audit'
-              })) || [],
-            ...report['Visual Audit expert']?.Top5CriticalVisualIssues?.map((i: any)=>({
-                ...i,
-                source: 'Visual Design'
-              })) || []
+            ...report['UX Audit expert']?.Top5CriticalUXIssues?.map((i: any) => ({
+              ...i,
+              source: 'UX Audit'
+            })) || [],
+            ...report['Product Audit expert']?.Top5CriticalProductIssues?.map((i: any) => ({
+              ...i,
+              source: 'Product Audit'
+            })) || [],
+            ...report['Visual Audit expert']?.Top5CriticalVisualIssues?.map((i: any) => ({
+              ...i,
+              source: 'Visual Design'
+            })) || []
           ];
           if (!report['Strategy Audit expert'] || allIssues.length === 0) {
             const impactOrder: any = {
@@ -707,7 +721,7 @@ serve(async (req: any)=>{
               Medium: 2,
               Low: 1
             };
-            allIssues.sort((a: any, b: any)=>impactOrder[b.ImpactLevel] - impactOrder[a.ImpactLevel] || a.Score - b.Score);
+            allIssues.sort((a: any, b: any) => impactOrder[b.ImpactLevel] - impactOrder[a.ImpactLevel] || a.Score - b.Score);
             return new Response(JSON.stringify(allIssues.slice(0, 5)), {
               status: 200,
               headers: {
@@ -735,26 +749,26 @@ ${strategyContext}
 ### Critical Issues List (JSON) ###
 ${JSON.stringify(allIssues, null, 2)}`;
           const schemas = getSchemas();
-          const callContextRank = ()=>ai.models.generateContent({
-              model: "gemini-2.5-flash",
-              contents: contents,
-              config: {
-                systemInstruction,
-                responseMimeType: "application/json",
-                responseSchema: {
-                  type: Type.ARRAY,
-                  maxItems: 5,
-                  items: schemas.criticalIssueSchema
-                },
-                safetySettings: [
-                  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-                  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-                  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-                  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-                ]
-              }
-            });
-          const response = await retryWithBackoff(callContextRank, 5, 5000, "Contextual Rank");
+          const callContextRank = () => ai.models.generateContent({
+            model: "gemini-1.5-flash", // Corrected model name
+            contents: contents,
+            config: {
+              systemInstruction,
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.ARRAY,
+                maxItems: 5,
+                items: schemas.criticalIssueSchema
+              },
+              safetySettings: [
+                { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+                { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+              ]
+            }
+          });
+          const response = await retryWithBackoff(callContextRank, 10, 2000, "Contextual Rank");
           const text = response.text;
           if (!text) throw new Error("Response text is undefined");
           return new Response(JSON.stringify(JSON.parse(text.trim())), {
@@ -783,7 +797,7 @@ ${JSON.stringify(allIssues, null, 2)}`;
           const { report, screenshots, url } = body;
           const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey);
           const auditUUID = crypto.randomUUID();
-          const uploadedScreenshots = await Promise.all(screenshots.map(async (screenshot: any, index: number)=>{
+          const uploadedScreenshots = await Promise.all(screenshots.map(async (screenshot: any, index: number) => {
             if (!screenshot.data) return {
               ...screenshot,
               data: undefined
@@ -806,7 +820,7 @@ ${JSON.stringify(allIssues, null, 2)}`;
             ...report,
             screenshots: uploadedScreenshots
           };
-          const primaryScreenshot = uploadedScreenshots.find((s)=>s.url && !s.isMobile);
+          const primaryScreenshot = uploadedScreenshots.find((s) => s.url && !s.isMobile);
           const { data: auditRecord, error: insertError } = await supabaseAdmin.from('audits').insert({
             url,
             report_data: reportToSave,

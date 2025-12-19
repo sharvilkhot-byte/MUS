@@ -6,6 +6,11 @@ import html2canvas from 'html2canvas';
 import { AnalysisReport, CriticalIssue, ScoredParameter, ExpertKey, StrategyAudit, Screenshot, UXAudit, ProductAudit, VisualAudit } from '../types';
 import { SkeletonLoader } from './SkeletonLoader';
 import { Logo } from './Logo';
+import toast from 'react-hot-toast';
+
+import { saveSharedAudit } from '../services/auditStorage';
+import { AuthBlocker } from './AuthBlocker';
+import { getCurrentSession } from '../services/authService';
 
 // --- Supabase Client Details ---
 const supabaseUrl = 'https://sobtfbplbpvfqeubjxex.supabase.co';
@@ -21,6 +26,7 @@ interface ReportDisplayProps {
     auditId: string | null;
     onRunNewAudit: () => void;
     whiteLabelLogo?: string | null;
+    isSharedView?: boolean; // NEW: Indicates if this is a shared/read-only view
 }
 
 type DetailedAuditType = 'UX Audit' | 'Product Audit' | 'Visual Design' | 'Strategic Foundation';
@@ -42,7 +48,7 @@ const ASSETS = {
         target: "https://storage.googleapis.com/tagjs-prod.appspot.com/v1/ti34aombIV/u3exi889_expires_30_days.png",
     },
     // Header/Divider assets
-    headerLogo: "https://lh3.googleusercontent.com/d/1ifgRwKrRT0nke8gKJL0Q3SXeP9eZ1454",
+    headerLogo: "/logo.png",
 };
 
 const getScoreData = (scoreOutOf10: number) => {
@@ -705,10 +711,24 @@ export const ReportBody: React.FC<{ report: AnalysisReport, url: string, screens
     );
 };
 
-export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit, whiteLabelLogo }: ReportDisplayProps) {
+export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit, whiteLabelLogo, screenshotMimeType, isSharedView = false }: ReportDisplayProps) {
     const [isPdfGenerating, setIsPdfGenerating] = useState(false);
     const [pdfError, setPdfError] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState('Executive Summary');
+
+    const [isSharing, setIsSharing] = useState(false);
+
+    // Auth Blocking State
+    const [isLocked, setIsLocked] = useState(true);
+
+    // Check session on mount REMOVED to enforce blocker every time
+    // React.useEffect(() => {
+    //     getCurrentSession().then(session => {
+    //         if (session) {
+    //             setIsLocked(false);
+    //         }
+    //     });
+    // }, []);
 
     const TABS = ['Executive Summary', 'UX Audit', 'Product Audit', 'Visual Design'];
 
@@ -746,6 +766,36 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
     };
 
     const isReportReady = report && ux && product && visual && strategy;
+
+    const handleShareAudit = async () => {
+        if (!report || isSharing) return;
+
+        setIsSharing(true);
+        try {
+            const sharedAuditId = await saveSharedAudit({
+                url,
+                report,
+                screenshots,
+                screenshotMimeType,
+                whiteLabelLogo,
+            });
+
+            const shareUrl = `${window.location.origin}/shared/${sharedAuditId}`;
+
+            // Copy to clipboard
+            await navigator.clipboard.writeText(shareUrl);
+
+            toast.success('Share link copied to clipboard!', {
+                duration: 4000,
+                icon: '🔗',
+            });
+        } catch (error) {
+            console.error('Error sharing audit:', error);
+            toast.error('Failed to create share link. Please try again.');
+        } finally {
+            setIsSharing(false);
+        }
+    };
 
 
     const generatePdf = async () => {
@@ -805,32 +855,42 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
         // We set to 920 to be safe but maximize space for 2 cards.
         const PAGE_HEIGHT_PX = 920;
 
-        // --- PREPARE LOGO FOR DOM INJECTION ---
-        let logoImgElement: HTMLImageElement | null = null;
-
+        // --- PREPARE LOGOS ---
+        // 1. White Label Logo
+        let whiteLabelImg: HTMLImageElement | null = null;
         if (whiteLabelLogo) {
             try {
                 const img = new Image();
                 img.crossOrigin = 'anonymous';
-                // We enforce max 60x60 via CSS styles when appending, 
-                // but we can also pre-calculate if needed. 
-                // CSS max-height/max-width is safer and easier.
                 img.src = whiteLabelLogo;
-
-                // Wait for it to load to be sure it's valid
                 await new Promise<void>((resolve, reject) => {
                     if (img.complete) resolve();
                     img.onload = () => resolve();
-                    img.onerror = (e) => reject(new Error(`Logo load failed: ${e}`));
+                    img.onerror = (e) => reject(new Error(`WL Logo load failed: ${e}`));
                     // fallback
                     setTimeout(resolve, 2000);
                 });
-
-                logoImgElement = img;
-
+                whiteLabelImg = img;
             } catch (e) {
-                console.warn("Failed to load logo for PDF. It will be skipped.", e);
+                console.warn("Failed to load WL logo", e);
             }
+        }
+
+        // 2. Default Branding Logo (Fallback)
+        let defaultLogoImg: HTMLImageElement | null = null;
+        try {
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.src = ASSETS.headerLogo;
+            await new Promise<void>((resolve, reject) => {
+                if (img.complete) resolve();
+                img.onload = () => resolve();
+                img.onerror = (e) => reject(new Error(`Default Logo load failed: ${e}`));
+                setTimeout(resolve, 2000);
+            });
+            defaultLogoImg = img;
+        } catch (e) {
+            console.warn("Failed to load Default logo", e);
         }
 
         const createPageDiv = () => {
@@ -840,12 +900,15 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
             div.style.minHeight = `${PAGE_HEIGHT_PX}px`;
             div.style.padding = '24px';
 
-            // CRITICAL: Top padding to prevent LOGO overlap
-            // Logo is max 60px + 24px top pos = ~84px used. 
-            // We give 100px top padding to be safe and clean.
-            div.style.paddingTop = logoImgElement ? '100px' : '24px';
+            // LOGO LOGIC: Use White Label if available, otherwise Default.
+            const activeLogo = whiteLabelImg || defaultLogoImg;
 
-            div.style.paddingBottom = '48px'; // Bottom safety
+            // CRITICAL: Top padding to prevent LOGO overlap
+            // Logo is max 60px + 12px top pos = ~72px used. 
+            // We give 88px top padding to maintain spacing.
+            div.style.paddingTop = activeLogo ? '88px' : '24px';
+
+            div.style.paddingBottom = '28px'; // Bottom safety
             div.style.backgroundColor = '#ffffff';
 
             div.style.position = 'absolute';
@@ -853,11 +916,11 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
             div.style.top = '0';
 
             // Inject Logo if present
-            if (logoImgElement) {
-                const logoClone = logoImgElement.cloneNode(true) as HTMLImageElement;
+            if (activeLogo) {
+                const logoClone = activeLogo.cloneNode(true) as HTMLImageElement;
                 logoClone.style.position = 'absolute';
-                logoClone.style.top = '24px';
-                logoClone.style.right = '24px';
+                logoClone.style.top = '12px';
+                logoClone.style.right = '12px';
                 // Enforce Max Size 60x60
                 logoClone.style.maxHeight = '60px';
                 logoClone.style.maxWidth = '60px';
@@ -886,7 +949,7 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
             const isCard = item.classList.contains('pdf-card');
             const forceBreak = item.classList.contains('force-page-break-before');
 
-            const isPageEmpty = currentPage.children.length === (logoImgElement ? 1 : 0); // Account for logo if present
+            const isPageEmpty = currentPage.children.length === ((whiteLabelImg || defaultLogoImg) ? 1 : 0); // Account for logo if present
 
             if (forceBreak && !isPageEmpty) {
                 currentPage = createPageDiv();
@@ -904,7 +967,7 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
 
             const cardLimitExceeded = isCard && (cardsOnPage >= 2);
 
-            const isPageCurrentlyEmpty = currentPage.children.length === (logoImgElement ? 2 : 1); // Logo + Item
+            const isPageCurrentlyEmpty = currentPage.children.length === ((whiteLabelImg || defaultLogoImg) ? 2 : 1); // Logo + Item
 
             if (contentFits && !cardLimitExceeded) {
                 if (isCard) cardsOnPage++;
@@ -976,21 +1039,25 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
     return (
         <div>
             <header className="text-center my-8 sm:my-12 px-4">
-                {whiteLabelLogo ? (
-                    <div className="mx-auto mb-8 sm:mb-12 flex justify-center">
-                        <img src={whiteLabelLogo} alt="Company Logo" style={{ height: '60px', width: 'auto' }} />
-                    </div>
-                ) : (
-                    <Logo className="mx-auto mb-8 sm:mb-12" />
-                )}
-                <h1 className="text-3xl sm:text-5xl font-extrabold text-slate-900">
-                    Let's Put Your Website Through a UX Checkup
-                </h1>
-                <p className="mt-4 text-lg sm:text-xl text-slate-600">
-                    AI-powered UX assessment to spot friction, gaps, and quick wins.
-                    <span className="block mt-2 font-semibold" style={{ color: 'rgb(79, 70, 229)' }}>Clear insights. Practical fixes. No fluff.</span>
-                </p>
-            </header>
+                {/* Report Header in UI - Always show Default Logo */}
+                <div className="flex flex-col items-center justify-center pt-8 pb-6 bg-slate-50">
+                    {isSharedView && whiteLabelLogo ? (
+                        <img
+                            src={whiteLabelLogo}
+                            alt="White Label Logo"
+                            className="mb-6 max-h-[140px] max-w-[140px] w-auto object-contain"
+                        />
+                    ) : (
+                        <Logo className="mb-6" />
+                    )}
+                    <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 text-center px-4">
+                        Let's Put Your Website Through a UX Checkup
+                    </h1>
+                    <p className="mt-4 text-lg text-slate-600 text-center px-4 max-w-2xl">
+                        AI-powered UX assessment to spot friction, gaps, and quick wins.
+                        <span className="block mt-2 font-semibold" style={{ color: 'rgb(79, 70, 229)' }}>Clear insights. Practical fixes. No fluff.</span>
+                    </p>
+                </div></header>
 
             <div className="bg-white rounded-2xl shadow-xl border border-slate-200">
                 {pdfError && (
@@ -1034,59 +1101,95 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
                                     </svg>
                                     {isPdfGenerating ? 'Generating...' : 'Download Report'}
                                 </button>
-                                <button
-                                    onClick={onRunNewAudit}
-                                    className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-slate-700 bg-white rounded-lg border border-slate-300 hover:bg-slate-50 disabled:opacity-50 transition-colors"
-                                >
-                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5">
-                                        <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
-                                    </svg>
-                                    New Audit
-                                </button>
+                                {!isSharedView && (
+                                    <button
+                                        onClick={handleShareAudit}
+                                        disabled={isSharing}
+                                        className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:bg-emerald-400 disabled:opacity-50 transition-colors"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186l9.566-5.314m-9.566 7.5l9.566 5.314m0 0a2.25 2.25 0 103.935 2.186 2.25 2.25 0 00-3.935-2.186zm0-12.814a2.25 2.25 0 103.933-2.185 2.25 2.25 0 00-3.933 2.185z" />
+                                        </svg>
+                                        {isSharing ? 'Sharing...' : 'Share Audit'}
+                                    </button>
+                                )}
+                                {!isSharedView && (
+                                    <button
+                                        onClick={onRunNewAudit}
+                                        className="inline-flex items-center gap-2 px-4 py-2 text-sm font-semibold text-slate-700 bg-white rounded-lg border border-slate-300 hover:bg-slate-50 disabled:opacity-50 transition-colors"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5">
+                                            <path fillRule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clipRule="evenodd" />
+                                        </svg>
+                                        New Audit
+                                    </button>
+                                )}
                             </div>
                         </div>
 
-                        <div className="p-4 sm:p-6 font-['DM_Sans']">
-                            {activeTab === 'Executive Summary' && (
-                                <div>
-                                    {/* Scores and Screenshot */}
-                                    <div className="flex flex-col self-stretch">
-                                        {primaryScreenshotSrc ? (
-                                            <div className="self-stretch aspect-video mb-8 sm:mb-[60px] rounded-md border border-slate-200 overflow-hidden bg-white relative">
-                                                <img src={primaryScreenshotSrc} className="w-full absolute top-0 left-0" style={{ height: 'auto' }} alt="website screenshot" />
-                                            </div>
-                                        ) : <SkeletonLoader className="aspect-video w-full mb-8 sm:mb-[60px] rounded-md" />}
-                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                                            <ScoreDisplayCard score={overallScore} label="Overall Score" />
-                                            <ScoreDisplayCard score={product.CategoryScore} label="Product Audit" />
-                                            <ScoreDisplayCard score={ux.CategoryScore} label="UX Audit" />
-                                            <ScoreDisplayCard score={visual.CategoryScore} label="Visual Design" />
-                                        </div>
-                                    </div>
-
-                                    <div className="my-8"></div>
-
-                                    {/* Context Capture */}
-                                    <DetailedAuditView auditData={auditDataMap['Strategic Foundation']} auditType={'Strategic Foundation'} />
-
-                                    <div className="my-8"></div>
-
-                                    {/* Executive Summary / Top 5 Issues */}
-                                    <div className="force-page-break-before">
-                                        <h2 className="text-black text-base font-bold mb-4">Executive Summary: Top 5 Most Impactful Issues</h2>
-                                        <div className="flex flex-col self-stretch gap-3">
-                                            {allIssues.map((issue, index) => <CriticalIssueCard key={index} issue={issue} />)}
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-
-                            {activeTab !== 'Executive Summary' && (
-                                <DetailedAuditView
-                                    auditData={auditDataMap[activeTab as keyof typeof auditDataMap]}
-                                    auditType={activeTab as DetailedAuditType}
+                        {/* AUTH BLOCKER OVERLAY */}
+                        <div className="relative">
+                            {isLocked && (
+                                <AuthBlocker
+                                    isUnlocked={false}
+                                    onUnlock={() => setIsLocked(false)}
+                                    auditUrl={url}
                                 />
                             )}
+
+                            {/* Main Content with conditional blur */}
+                            <div className={`p-4 sm:p-6 font-['DM_Sans'] transition-all duration-500 ${isLocked ? 'blur-sm pointer-events-none select-none h-[600px] overflow-hidden' : ''}`}>
+                                {/* When locked, we force show UX Audit (but blurred) for better "sneak peek" effect */}
+                                {isLocked ? (
+                                    <DetailedAuditView
+                                        auditData={ux}
+                                        auditType="UX Audit"
+                                    />
+                                ) : (
+                                    <>
+                                        {activeTab === 'Executive Summary' && (
+                                            <div>
+                                                {/* Scores and Screenshot */}
+                                                <div className="flex flex-col self-stretch">
+                                                    {primaryScreenshotSrc ? (
+                                                        <div className="self-stretch aspect-video mb-8 sm:mb-[60px] rounded-md border border-slate-200 overflow-hidden bg-white relative">
+                                                            <img src={primaryScreenshotSrc} className="w-full absolute top-0 left-0" style={{ height: 'auto' }} alt="website screenshot" />
+                                                        </div>
+                                                    ) : <SkeletonLoader className="aspect-video w-full mb-8 sm:mb-[60px] rounded-md" />}
+                                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                                                        <ScoreDisplayCard score={overallScore} label="Overall Score" />
+                                                        <ScoreDisplayCard score={product.CategoryScore} label="Product Audit" />
+                                                        <ScoreDisplayCard score={ux.CategoryScore} label="UX Audit" />
+                                                        <ScoreDisplayCard score={visual.CategoryScore} label="Visual Design" />
+                                                    </div>
+                                                </div>
+
+                                                <div className="my-8"></div>
+
+                                                {/* Context Capture */}
+                                                <DetailedAuditView auditData={strategy} auditType={'Strategic Foundation'} />
+
+                                                <div className="my-8"></div>
+
+                                                {/* Top 5 Issues */}
+                                                <div className="force-page-break-before">
+                                                    <h2 className="text-black text-base font-bold mb-4">Executive Summary: Top 5 Most Impactful Issues</h2>
+                                                    <div className="flex flex-col self-stretch gap-3">
+                                                        {Top5ContextualIssues.map((issue, index) => <CriticalIssueCard key={index} issue={issue} />)}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {activeTab !== 'Executive Summary' && (
+                                            <DetailedAuditView
+                                                auditData={activeTab === 'UX Audit' ? ux : activeTab === 'Product Audit' ? product : activeTab === 'Visual Design' ? visual : strategy}
+                                                auditType={activeTab as DetailedAuditType}
+                                            />
+                                        )}
+                                    </>
+                                )}
+                            </div>
                         </div>
                     </>
                 )}

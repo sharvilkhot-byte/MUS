@@ -25,3 +25,6 @@ dist-ssr
 
 # System Files
 .gemini/
+
+.vercel
+.env*.local
