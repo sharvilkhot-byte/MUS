@@ -1,20 +1,25 @@
-
 import React, { useState, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-import { AnalysisReport, CriticalIssue, ScoredParameter, ExpertKey, StrategyAudit, Screenshot, UXAudit, ProductAudit, VisualAudit } from '../types';
+import { AnalysisReport, CriticalIssue, Screenshot } from '../types';
 import { SkeletonLoader } from './SkeletonLoader';
 import { Logo } from './Logo';
 import toast from 'react-hot-toast';
 
 import { saveSharedAudit } from '../services/auditStorage';
 import { AuthBlocker } from './AuthBlocker';
-import { getCurrentSession } from '../services/authService';
+// import { getCurrentSession } from '../services/authService'; // Keeping this commented out as per user snippet
+
+import { ASSETS } from './report/constants';
+import { ScoreDisplayCard } from './report/ScoreComponents';
+import { CriticalIssueCard } from './report/AuditCards';
+import { DetailedAuditView, DetailedAuditType } from './report/DetailedAuditView';
+import { StrategyAuditDisplay } from './report/StrategyComponents';
 
 // --- Supabase Client Details ---
-const supabaseUrl = 'https://sobtfbplbpvfqeubjxex.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNvYnRmYnBsYnB2ZnFldWJqeGV4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkxNDgzMDYsImV4cCI6MjA3NDcyNDMwNn0.ewfxDwlapmRpfyvYD3ALb-WyL12ty1eP8nzKyrc66ho';
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 // -----------------------------
 
 interface ReportDisplayProps {
@@ -27,603 +32,6 @@ interface ReportDisplayProps {
     onRunNewAudit: () => void;
     whiteLabelLogo?: string | null;
     isSharedView?: boolean; // NEW: Indicates if this is a shared/read-only view
-}
-
-type DetailedAuditType = 'UX Audit' | 'Product Audit' | 'Visual Design' | 'Strategic Foundation';
-
-// --- START OF ASSETS & STYLING HELPERS ---
-const ASSETS = {
-    // Icons from user's provided design
-    recommendation: "https://storage.googleapis.com/tagjs-prod.appspot.com/v1/ti34aombIV/zp7uywub_expires_30_days.png",
-    citations: "https://storage.googleapis.com/tagjs-prod.appspot.com/v1/ti34aombIV/izpk4e7a_expires_30_days.png",
-    keyFindings: "https://storage.googleapis.com/tagjs-prod.appspot.com/v1/ti34aombIV/q6fd05yd_expires_30_days.png",
-    personas: {
-        one: "https://storage.googleapis.com/tagjs-prod.appspot.com/v1/ti34aombIV/ndgxu5iv_expires_30_days.png",
-        two: "https://storage.googleapis.com/tagjs-prod.appspot.com/v1/ti34aombIV/zibh77po_expires_30_days.png",
-        three: "https://storage.googleapis.com/tagjs-prod.appspot.com/v1/ti34aombIV/bb9spacl_expires_30_days.png",
-    },
-    strategyIcons: {
-        domain: "https://storage.googleapis.com/tagjs-prod.appspot.com/v1/ti34aombIV/d33f2yh1_expires_30_days.png",
-        purpose: "https://storage.googleapis.com/tagjs-prod.appspot.com/v1/ti34aombIV/ja78rqs0_expires_30_days.png",
-        target: "https://storage.googleapis.com/tagjs-prod.appspot.com/v1/ti34aombIV/u3exi889_expires_30_days.png",
-    },
-    // Header/Divider assets
-    headerLogo: "/logo.png",
-};
-
-const getScoreData = (scoreOutOf10: number) => {
-    if (scoreOutOf10 >= 9) return { text: "Very Good", color: "#007000", bg: "#EDF6ED" };
-    if (scoreOutOf10 >= 7) return { text: "Satisfactory", color: "#471900", bg: "#FFF6E6" };
-    if (scoreOutOf10 >= 5) return { text: "Needs Improvement", color: "#471900", bg: "#FFF6E6" };
-    return { text: "Critical", color: "#DC0909", bg: "#FDF0F0" };
-};
-
-const getScoreIndicatorData = (scoreOutOf10: number) => {
-    if (scoreOutOf10 >= 9) return {
-        text: "Very Good",
-        textColor: "#00742B", // Matches provided design
-        bgColor: "#EDF6ED", // Card BG
-        boxColor: "#DDEEDD" // Score Box BG
-    };
-    if (scoreOutOf10 >= 7) return {
-        text: "Satisfactory",
-        textColor: "#A66800",
-        bgColor: "#FFF6E6",
-        boxColor: "#FFECC2" // Estimated darker shade for box
-    };
-    if (scoreOutOf10 >= 5) return {
-        text: "Needs Improvement",
-        textColor: "#A66800",
-        bgColor: "#FFF6E6",
-        boxColor: "#FFECC2"
-    };
-    return {
-        text: "Critical",
-        textColor: "#DC0909",
-        bgColor: "#FDF0F0",
-        boxColor: "#FCE4E4"
-    };
-};
-
-const CONFIDENCE_STYLES = {
-    high: 'text-[#00742B]',
-    medium: 'text-amber-800',
-    low: 'text-red-800',
-};
-
-// --- HELPER COMPONENTS ---
-
-function ScoreGauge({ score, size = 74, strokeWidth = 8 }: { score: number; size?: number; strokeWidth?: number }) {
-    const radius = (size - strokeWidth) / 2;
-    const circumference = radius * Math.PI; // Half circle
-    const cappedScore = Math.max(0, Math.min(10, score));
-    const offset = circumference - (cappedScore / 10) * circumference;
-
-    const getGaugeColor = (s: number) => {
-        if (s >= 9) return "#00742B"; // Very Good - Green
-        if (s >= 7) return "#A66800"; // Satisfactory / Needs Improvement - Brownish/Yellow
-        if (s >= 5) return "#A66800"; // Satisfactory / Needs Improvement - Brownish/Yellow
-        return "#D00000"; // Critical - Red
-    };
-
-    const color = getGaugeColor(cappedScore);
-    const trackColor = "#9CA3AF"; // Darker gray (Gray 400) for better visibility on white
-
-    return (
-        <svg
-            width={size}
-            height={size / 2 + strokeWidth / 2}
-            viewBox={`0 0 ${size} ${size / 2 + strokeWidth / 2}`}
-            style={{ overflow: 'visible' }}
-        >
-            <path
-                d={`M ${strokeWidth / 2} ${size / 2} A ${radius} ${radius} 0 0 1 ${size - strokeWidth / 2} ${size / 2}`}
-                fill="none"
-                stroke={trackColor}
-                strokeWidth={strokeWidth}
-                strokeLinecap="round"
-            />
-            <path
-                d={`M ${strokeWidth / 2} ${size / 2} A ${radius} ${radius} 0 0 1 ${size - strokeWidth / 2} ${size / 2}`}
-                fill="none"
-                stroke={color}
-                strokeWidth={strokeWidth}
-                strokeDasharray={circumference}
-                strokeDashoffset={offset}
-                strokeLinecap="round"
-                style={{
-                    transition: 'stroke-dashoffset 0.5s ease-out',
-                }}
-            />
-        </svg>
-    );
-}
-
-function ScoreIndicator({ score }: { score: number }) {
-    const indicatorData = getScoreIndicatorData(score);
-    const scoreText = Math.round(score);
-
-    return (
-        <div
-            className="flex flex-col shrink-0 items-center py-[11px] px-[33px] gap-3 rounded-lg"
-            style={{ backgroundColor: "#FFFFFF" }}
-        >
-            <div className="relative w-[74px] h-[41px]">
-                <div className="absolute top-0 left-0">
-                    <ScoreGauge score={score} />
-                </div>
-                <span className="text-black text-xs font-bold absolute bottom-[5px] inset-x-0 text-center">
-                    {`${scoreText}/10`}
-                </span>
-            </div>
-            <span className="text-[10px] font-bold" style={{ color: indicatorData.textColor }}>
-                {indicatorData.text}
-            </span>
-        </div>
-    );
-}
-
-function ScoreDisplayCard({ score, label }: { score?: number; label: string }) {
-    if (score === undefined) return <SkeletonLoader className="h-32 flex-1 rounded-lg" />;
-
-    const indicatorData = getScoreIndicatorData(score);
-    const scoreText = score.toFixed(1);
-
-    return (
-        <div
-            className="flex flex-1 flex-col items-center pt-[9px] pb-[9px] rounded-lg break-inside-avoid"
-            style={{
-                backgroundColor: indicatorData.bgColor,
-                fontFamily: '"DM Sans", sans-serif'
-            }}
-        >
-            <span className="text-[#000000] text-[12px] font-bold mb-[8px] text-center">{label}</span>
-            <div className="flex flex-col items-center mb-[12px] px-2 sm:px-[23px] relative">
-                <div style={{ width: '74px', height: '37px', position: 'relative' }}>
-                    <div style={{ position: 'absolute', top: 0, left: 0 }}>
-                        <ScoreGauge score={score} size={74} strokeWidth={8} />
-                    </div>
-                    <span
-                        className="absolute text-center text-[#000000] text-[12px] font-bold"
-                        style={{ bottom: '-4px', left: 0, right: 0 }}
-                    >
-                        {scoreText}/10
-                    </span>
-                </div>
-            </div>
-            <span className="text-[10px] font-bold text-center" style={{ color: indicatorData.textColor }}>
-                {indicatorData.text}
-            </span>
-        </div>
-    );
-}
-
-function CriticalIssueCard({ issue }: { issue: CriticalIssue & { source?: string } }) {
-    const indicatorData = getScoreIndicatorData(issue.Score);
-    const confidence = issue.Confidence || 'high';
-    const confColor = confidence === 'high' ? '#00742B' : (confidence === 'medium' ? '#A66800' : '#D00000');
-    const confText = confidence.charAt(0).toUpperCase() + confidence.slice(1) + " Confidence";
-
-    return (
-        <div
-            className="flex flex-col items-start self-stretch p-4 rounded-xl break-inside-avoid mb-3 gap-6 pdf-item pdf-card"
-            style={{ backgroundColor: indicatorData.bgColor, fontFamily: '"DM Sans", sans-serif' }}
-        >
-            {/* Top Row: Content Left, Score Right */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-start self-stretch gap-6">
-                {/* Left Column: Confidence, Title, Analysis */}
-                <div className="flex flex-1 flex-col gap-[6px]">
-                    <div className="flex flex-col items-start">
-                        <span className="text-[10px] font-bold" style={{ color: confColor }}>
-                            {confText} {issue.source ? `• ${issue.source}` : ''}
-                        </span>
-                    </div>
-                    <div className="flex flex-col gap-[7px]">
-                        <span className="text-[#000000] text-[14px] font-bold">{issue.Issue}</span>
-                        <span className="text-[#74736F] text-[12px] leading-[150%]">{issue.Analysis}</span>
-                    </div>
-                </div>
-
-                {/* Right Column: Score Box */}
-                <div
-                    className="flex flex-col items-center shrink-0 rounded-lg p-4 sm:py-[34px] sm:px-[33px] gap-2 w-full sm:w-auto"
-                    style={{ backgroundColor: indicatorData.boxColor }}
-                >
-                    <div className="relative w-[74px] h-[37px]">
-                        <div className="absolute top-0 left-0">
-                            <ScoreGauge score={issue.Score} size={74} strokeWidth={8} />
-                        </div>
-                        <span className="absolute bottom-0 inset-x-0 text-center text-black text-[12px] font-bold">
-                            {Math.round(issue.Score)}/10
-                        </span>
-                    </div>
-                    <span className="text-[10px] font-bold" style={{ color: indicatorData.textColor }}>
-                        {indicatorData.text}
-                    </span>
-                </div>
-            </div>
-
-            {/* Bottom Section: Findings, Recommendations, Citations */}
-            <div className="flex flex-col self-stretch gap-4">
-                {/* Key Findings */}
-                {issue.KeyFinding && issue.KeyFinding.toLowerCase() !== 'n/a' && (
-                    <div className="flex flex-col gap-[3px] pr-0 lg:pr-[41px] pb-[3px]">
-                        <span className="text-[#000000] text-[12px] font-bold">👁️ Key Findings</span>
-                        <span className="text-[#74736F] text-[12px] leading-[150%]">{issue.KeyFinding}</span>
-                    </div>
-                )}
-
-                {/* Recommendation */}
-                {issue.Recommendation && issue.Recommendation.toLowerCase() !== 'n/a' && (
-                    <div className="flex flex-col gap-[3px] pr-0 lg:pr-[40px]">
-                        <span className="text-[#000000] text-[12px] font-bold">💡 Recommendation</span>
-                        <span className="text-[#74736F] text-[12px] leading-[150%]">{issue.Recommendation}</span>
-                    </div>
-                )}
-
-                {/* Citations */}
-                {issue.Citations?.length > 0 && (
-                    <div className="flex flex-col pt-4 gap-[6px]">
-                        <span className="text-[#000000] text-[12px] font-bold">🔗 Citations</span>
-                        <div className="flex flex-col gap-2">
-                            {issue.Citations.map((citation, i) => (
-                                <span key={i} className="text-[#6B6A67] text-[12px] leading-[150%]">
-                                    “{citation}”
-                                </span>
-                            ))}
-                        </div>
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-}
-
-function ScoredParameterCard({ param }: { param: ScoredParameter }) {
-    const isNotApplicable = param.Score === 0;
-    const confidence = param.Confidence || 'low';
-    const confColor = confidence === 'high' ? '#00742B' : (confidence === 'medium' ? '#A66800' : '#D00000');
-    const confText = confidence.charAt(0).toUpperCase() + confidence.slice(1) + " Confidence";
-    const title = param.ParameterName?.replace(/([A-Z])/g, ' $1').trim() || 'Parameter';
-
-    const indicatorData = isNotApplicable
-        ? { bgColor: '#F3F4F6', boxColor: '#E5E7EB', textColor: '#6B7280', text: 'N/A' }
-        : getScoreIndicatorData(param.Score);
-
-    return (
-        <div
-            className="flex flex-col items-start self-stretch p-4 rounded-xl break-inside-avoid mb-6 gap-6 pdf-item pdf-card"
-            style={{ backgroundColor: indicatorData.bgColor, fontFamily: '"DM Sans", sans-serif' }}
-        >
-            {/* Top Row: Content Left, Score Right */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-start self-stretch gap-6">
-                {/* Left Column: Confidence, Title, Analysis */}
-                <div className="flex flex-1 flex-col gap-[6px]">
-                    {!isNotApplicable && (
-                        <div className="flex flex-col items-start">
-                            <span className="text-[10px] font-bold" style={{ color: confColor }}>
-                                {confText}
-                            </span>
-                        </div>
-                    )}
-                    <div className="flex flex-col gap-[7px]">
-                        <span className="text-[#000000] text-[14px] font-bold">{title}</span>
-                        <span className="text-[#74736F] text-[12px] leading-[150%]">{param.Analysis}</span>
-                    </div>
-                </div>
-
-                {/* Right Column: Score Box */}
-                {!isNotApplicable && (
-                    <div
-                        className="flex flex-col items-center shrink-0 rounded-lg p-4 sm:py-[34px] sm:px-[33px] gap-2 w-full sm:w-auto"
-                        style={{ backgroundColor: indicatorData.boxColor }}
-                    >
-                        <div className="relative w-[74px] h-[37px]">
-                            <div className="absolute top-0 left-0">
-                                <ScoreGauge score={param.Score} size={74} strokeWidth={8} />
-                            </div>
-                            <span className="absolute bottom-0 inset-x-0 text-center text-black text-[12px] font-bold">
-                                {param.Score}/10
-                            </span>
-                        </div>
-                        <span className="text-[10px] font-bold" style={{ color: indicatorData.textColor }}>
-                            {indicatorData.text}
-                        </span>
-                    </div>
-                )}
-            </div>
-
-            {/* Bottom Section: Findings, Recommendations, Citations */}
-            <div className="flex flex-col self-stretch gap-4">
-                {/* Key Findings */}
-                {param.KeyFinding && param.KeyFinding.toLowerCase() !== 'n/a' && (
-                    <div className="flex flex-col gap-[3px] pr-0 lg:pr-[41px] pb-[3px]">
-                        <span className="text-[#000000] text-[12px] font-bold">👁️ Key Findings</span>
-                        <span className="text-[#74736F] text-[12px] leading-[150%]">{param.KeyFinding}</span>
-                    </div>
-                )}
-
-                {/* Recommendation */}
-                {param.Recommendation && param.Recommendation.toLowerCase() !== 'n/a' && (
-                    <div className="flex flex-col gap-[3px] pr-0 lg:pr-[40px]">
-                        <span className="text-[#000000] text-[12px] font-bold">💡 Recommendation</span>
-                        <span className="text-[#74736F] text-[12px] leading-[150%]">{param.Recommendation}</span>
-                    </div>
-                )}
-
-                {/* Citations */}
-                {param.Citations?.length > 0 && (
-                    <div className="flex flex-col pt-4 gap-[6px]">
-                        <span className="text-[#000000] text-[12px] font-bold">🔗 Citations</span>
-                        <div className="flex flex-col gap-2">
-                            {param.Citations.map((citation, i) => (
-                                <span key={i} className="text-[#6B6A67] text-[12px] leading-[150%]">
-                                    “{citation}”
-                                </span>
-                            ))}
-                        </div>
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-}
-
-function AuditSubSectionHeader({ title, score, forceBreak }: { title: string; score?: number; forceBreak?: boolean }) {
-    return (
-        <div className={`flex justify-between items-center self-stretch mb-4 rounded-tl-3xl rounded-tr-3xl break-inside-avoid pdf-item pdf-subheader ${forceBreak ? 'force-page-break-before' : ''}`}>
-            <h3 className="text-black text-base font-bold">{title}</h3>
-            {score !== undefined && (
-                <div className="flex shrink-0 items-start py-1">
-                    <span className="text-black text-xs font-bold mr-1">Assessment Score</span>
-                    <span className="text-[#A66800] text-xs font-bold">{score.toFixed(0)} / 100</span>
-                </div>
-            )}
-        </div>
-    );
-}
-
-function UserPersonasDisplay({ personas }: { personas?: StrategyAudit['UserPersonas'] }) {
-    // New assets for personas
-    const personaAvatars = [
-        ASSETS.personas.one,
-        ASSETS.personas.two,
-        ASSETS.personas.three,
-    ];
-
-    if (!personas) return null;
-
-    return (
-        <div className="flex flex-col gap-3 font-['DM_Sans']">
-            {personas.map((p, i) => (
-                <div key={i} className="flex flex-col bg-[#F7FAFF] rounded-xl p-4 mb-3 gap-6 break-inside-avoid pdf-item pdf-card">
-                    {/* Header Row */}
-                    <div className="flex items-start gap-1.5 self-stretch">
-                        <img
-                            src={personaAvatars[i % 3]}
-                            className="w-[39px] h-[39px] object-fill shrink-0"
-                            alt={`${p.Name} avatar`}
-                        />
-                        <div className="flex flex-1 flex-col items-start gap-0.5">
-                            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center self-stretch">
-                                <span className="text-[#000000] text-[16px] font-bold">{p.Name}</span>
-                                <div className="flex flex-col items-start pb-[1px] shrink-0">
-                                    <span className="text-[#00742B] text-[10px] font-bold">Age - {p.Age}</span>
-                                </div>
-                            </div>
-                            <span className="text-[#74736F] text-[12px]">{p.Occupation} from {p.Location}</span>
-                        </div>
-                    </div>
-
-                    {/* Content Section */}
-                    <div className="flex flex-col self-stretch gap-4">
-                        {/* Needs & Behavior */}
-                        <div className="flex flex-col items-start self-stretch pr-0 sm:pr-[15px]">
-                            <span className="text-[#000000] text-[12px] font-bold">🔍 Needs & Behavior</span>
-                            <span className="text-[#6D6F71] text-[12px]">{p.UserNeedsBehavior}</span>
-                        </div>
-
-                        {/* Pain Points */}
-                        <div className="flex flex-col items-start self-stretch">
-                            <span className="text-[#000000] text-[12px] font-bold">🎯 Pain Points & Opportunities</span>
-                            <span className="text-[#6D6F71] text-[12px]">{p.PainPointOpportunity}</span>
-                        </div>
-                    </div>
-                </div>
-            ))}
-        </div>
-    );
-}
-
-function StrategyAuditDisplay({ audit }: { audit: StrategyAudit }) {
-    const { DomainAnalysis, PurposeAnalysis, TargetAudience, UserPersonas } = audit || {};
-
-    // Shared typography class
-    const bodyTextStyle = "text-[#6C6B67] text-[12px] font-medium leading-[150%]";
-
-    return (
-        <div className="flex flex-col self-stretch mb-5 gap-4 font-['DM_Sans']">
-            <div className="force-page-break-before">
-                <h3 className="text-black text-base font-bold break-inside-avoid pdf-item pdf-section-title">Context Capture</h3>
-                <div className="flex flex-col self-stretch gap-3">
-
-                    {/* Domain Analysis */}
-                    {DomainAnalysis && (
-                        <div className="flex flex-col bg-[#F7FAFF] rounded-xl p-4 mt-4 mb-3 gap-2 break-inside-avoid pdf-item pdf-card">
-                            {/* Header Row */}
-                            <div className="flex items-start gap-6 self-stretch">
-                                <div className="flex-1 flex flex-col items-start gap-[6px] pb-2 order-2 sm:order-1">
-                                    <div className="flex flex-col items-start pb-[1px] self-stretch">
-                                        <span className="text-[#00742B] text-[10px] font-bold">
-                                            {DomainAnalysis.Confidence?.charAt(0).toUpperCase() + DomainAnalysis.Confidence?.slice(1) || "High"} Confidence
-                                        </span>
-                                    </div>
-                                    <span className="text-black text-[14px] font-bold">Domain Analysis</span>
-                                </div>
-                                <img src={ASSETS.strategyIcons.domain} className="w-12 h-12 object-fill order-1 sm:order-2" alt="Domain Icon" />
-                            </div>
-                            {/* Content */}
-                            <div className="flex flex-col items-start self-stretch pt-1">
-                                {DomainAnalysis.Items?.map((item, i) => (
-                                    <span key={i} className={`${bodyTextStyle} mb-2`}>{item}</span>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Purpose Analysis */}
-                    {PurposeAnalysis && (
-                        <div className="flex flex-col items-start bg-[#F7FAFF] rounded-xl p-4 mb-3 break-inside-avoid pdf-item pdf-card">
-                            {/* Header Row */}
-                            <div className="flex items-start gap-6 self-stretch mb-4 sm:mb-[21px]">
-                                <div className="flex flex-1 flex-col items-start gap-[6px] pb-2 order-2 sm:order-1">
-                                    <div className="flex flex-col items-start pb-[1px] self-stretch">
-                                        <span className="text-[#00742B] text-[10px] font-bold">
-                                            {PurposeAnalysis.Confidence?.charAt(0).toUpperCase() + PurposeAnalysis.Confidence?.slice(1) || "High"} Confidence
-                                        </span>
-                                    </div>
-                                    <span className="text-black text-[14px] font-bold">Purpose Analysis</span>
-                                </div>
-                                <img src={ASSETS.strategyIcons.purpose} className="w-12 h-12 object-fill order-1 sm:order-2" alt="Purpose Icon" />
-                            </div>
-
-                            {/* Primary Purpose */}
-                            <span className="text-black text-[12px] font-bold mb-1">💡Primary Purpose</span>
-                            <span className={`${bodyTextStyle} whitespace-pre-line mb-4 w-full max-w-full sm:max-w-[400px]`}>
-                                {PurposeAnalysis.PrimaryPurpose?.join('\n')}
-                            </span>
-
-                            {/* Key Objectives */}
-                            <div className="flex flex-col items-start self-stretch">
-                                <span className="text-black text-[12px] font-bold mb-1">👁️ Key Objectives</span>
-                                <span className={`${bodyTextStyle} w-full`}>
-                                    {PurposeAnalysis.KeyObjectives}
-                                </span>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Target Audience */}
-                    {TargetAudience && (
-                        <div className="flex flex-col bg-[#F7FAFF] rounded-xl p-4 gap-3 break-inside-avoid pdf-item pdf-card">
-                            {/* Header Row */}
-                            <div className="flex items-start gap-6 self-stretch">
-                                <div className="flex flex-1 flex-col items-start gap-[6px] pb-2 order-2 sm:order-1">
-                                    <div className="flex flex-col items-start pb-[1px] self-stretch">
-                                        <span className="text-[#00742B] text-[10px] font-bold">
-                                            {TargetAudience.Confidence?.charAt(0).toUpperCase() + TargetAudience.Confidence?.slice(1) || "High"} Confidence
-                                        </span>
-                                    </div>
-                                    <span className="text-black text-[14px] font-bold">Target Audience</span>
-                                </div>
-                                <img src={ASSETS.strategyIcons.target} className="w-12 h-12 object-fill order-1 sm:order-2" alt="Target Icon" />
-                            </div>
-
-                            {/* Content Grid */}
-                            <div className="flex flex-col self-stretch gap-4">
-                                {/* Website Type */}
-                                <div className="flex flex-col items-start self-stretch">
-                                    <span className="text-black text-[12px] font-bold mb-1">🌐 Website Type</span>
-                                    <span className={bodyTextStyle}>{TargetAudience.WebsiteType}</span>
-                                </div>
-
-                                {/* Primary Audience */}
-                                <div className="flex flex-col items-start self-stretch gap-[6px]">
-                                    <span className="text-black text-[12px] font-bold">👥 Primary Audience</span>
-                                    <div className="flex flex-col items-start self-stretch gap-[6px]">
-                                        {TargetAudience.Primary.map((p, i) => (
-                                            <span key={i} className={bodyTextStyle}>{p}</span>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                {/* Demographics & Psychographics */}
-                                <div className="flex flex-col self-stretch pt-4 gap-[6px]">
-                                    <div className="flex flex-col items-start pb-[1px] self-stretch">
-                                        <span className="text-black text-[12px] font-bold">📊 Demographics & Psychographics</span>
-                                    </div>
-                                    <div className="flex flex-col gap-2 self-stretch">
-                                        <span className={bodyTextStyle}>{TargetAudience.DemographicsPsychographics}</span>
-                                    </div>
-                                </div>
-
-                                {/* Market Segmentation */}
-                                <div className="flex flex-col items-start self-stretch pr-0 sm:pr-3 gap-[6px]">
-                                    <span className="text-black text-[12px] font-bold">🏪 Market Segmentation</span>
-                                    <span className={bodyTextStyle}>{TargetAudience.MarketSegmentation}</span>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            </div>
-            {UserPersonas?.length > 0 && (
-                <div className="flex flex-col self-stretch gap-4 mt-5 force-page-break-before">
-                    <h3 className="text-black text-base font-bold break-inside-avoid pdf-item pdf-section-title">User Personas</h3>
-                    <UserPersonasDisplay personas={UserPersonas} />
-                </div>
-            )}
-        </div>
-    );
-}
-
-function mapAuditToSections(audit: any, type: DetailedAuditType) {
-    if (!audit) return [];
-    switch (type) {
-        case 'UX Audit': return [
-            { title: 'Usability Heuristics', data: audit.UsabilityHeuristics },
-            { title: 'Usability Metrics', data: audit.UsabilityMetrics },
-            { title: 'Accessibility Compliance', data: audit.AccessibilityCompliance },
-        ];
-        case 'Product Audit': return [
-            { title: 'Market Fit & Business Alignment', data: audit.MarketFitAndBusinessAlignment },
-            { title: 'User Retention & Engagement', data: audit.UserRetentionAndEngagement },
-            { title: 'Conversion Optimization', data: audit.ConversionOptimization },
-        ];
-        case 'Visual Design': return [
-            { title: 'UI Consistency & Branding', data: audit.UIConsistencyAndBranding },
-            { title: 'Aesthetic & Emotional Appeal', data: audit.AestheticAndEmotionalAppeal },
-            { title: 'Responsiveness & Adaptability', data: audit.ResponsivenessAndAdaptability },
-        ];
-        default: return [];
-    }
-}
-
-function DetailedAuditView({ auditData, auditType }: { auditData: UXAudit | ProductAudit | VisualAudit | StrategyAudit | undefined, auditType: DetailedAuditType }) {
-    if (!auditData) {
-        return <SkeletonLoader className="h-96 w-full" />;
-    }
-
-    if (auditType === 'Strategic Foundation') {
-        return (
-            <div className="self-stretch">
-                <StrategyAuditDisplay audit={auditData as StrategyAudit} />
-            </div>
-        );
-    }
-
-    // Cast to generic type that has the common fields for UX, Product, Visual
-    const audit = auditData as (UXAudit | ProductAudit | VisualAudit);
-    const sections = mapAuditToSections(audit, auditType);
-
-    const isFirstSection = (index: number) => index === 0;
-
-    return (
-        <div className="flex flex-col self-stretch gap-6 font-['DM_Sans']">
-            <h2 className="text-2xl font-bold text-slate-800 mb-6 break-inside-avoid pdf-item pdf-section-title">{/* Page break is handled by wrapper in ReportBody */}Detailed {auditType}</h2>
-            {/* Detailed Sections */}
-            {sections.map((section, index) => (
-                section.data && section.data.Parameters && (
-                    <div key={section.title} className="mb-5">
-                        <AuditSubSectionHeader title={section.title} score={section.data.SectionScore * 10} forceBreak={!isFirstSection(index)} />
-                        <div className="flex flex-col self-stretch gap-3">
-                            {section.data.Parameters.map((p: ScoredParameter, i: number) => <ScoredParameterCard key={i} param={p} />)}
-                        </div>
-                    </div>
-                )
-            ))}
-        </div>
-    );
 }
 
 // --- MAIN COMPONENTS ---
@@ -671,7 +79,7 @@ export const ReportBody: React.FC<{ report: AnalysisReport, url: string, screens
                 ) : (
                     <SkeletonLoader className="aspect-video w-full mb-8 sm:mb-[60px] rounded-md" />
                 )}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 break-inside-avoid">
+                <div className="grid grid-cols-2 min-[550px]:grid-cols-4 gap-3 break-inside-avoid">
                     <ScoreDisplayCard score={overallScore} label="Overall Score" />
                     {product ? <ScoreDisplayCard score={product.CategoryScore} label="Product Audit" /> : <SkeletonLoader className="h-32 flex-1 rounded-lg" />}
                     {ux ? <ScoreDisplayCard score={ux.CategoryScore} label="UX Audit" /> : <SkeletonLoader className="h-32 flex-1 rounded-lg" />}
@@ -684,7 +92,11 @@ export const ReportBody: React.FC<{ report: AnalysisReport, url: string, screens
                 <h2 className="text-black text-base font-bold mt-8 mb-4 break-inside-avoid pdf-item pdf-section-title force-page-break-before">Executive Summary: Top 5 Most Impactful Issues</h2>
                 <div className="flex flex-col self-stretch gap-3">
                     {allIssues.length > 0 ? (
-                        allIssues.map((issue, index) => <CriticalIssueCard key={index} issue={issue} />)
+                        allIssues.map((issue, index) => (
+                            <React.Fragment key={index}>
+                                <CriticalIssueCard issue={issue} />
+                            </React.Fragment>
+                        ))
                     ) : (Array.from({ length: 5 }).map((_, index) => <SkeletonLoader key={index} className="h-64 w-full rounded-xl" />))}
                 </div>
             </div>
@@ -719,6 +131,7 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
     const [isSharing, setIsSharing] = useState(false);
 
     // Auth Blocking State
+    // If it's a shared view, we DO NOT lock. Otherwise, we lock initially.
     const [isLocked, setIsLocked] = useState(!isSharedView);
 
     // Check session on mount REMOVED to enforce blocker every time
@@ -757,13 +170,6 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
         issues.sort((a, b) => a.Score - b.Score);
         return issues.slice(0, 5);
     }, [report, Top5ContextualIssues]);
-
-    const auditDataMap = {
-        'UX Audit': ux,
-        'Product Audit': product,
-        'Visual Design': visual,
-        'Strategic Foundation': strategy,
-    };
 
     const isReportReady = report && ux && product && visual && strategy;
 
@@ -1175,7 +581,11 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
                                                 <div className="force-page-break-before">
                                                     <h2 className="text-black text-base font-bold mb-4">Executive Summary: Top 5 Most Impactful Issues</h2>
                                                     <div className="flex flex-col self-stretch gap-3">
-                                                        {Top5ContextualIssues.map((issue, index) => <CriticalIssueCard key={index} issue={issue} />)}
+                                                        {Top5ContextualIssues.map((issue, index) => (
+                                                            <React.Fragment key={index}>
+                                                                <CriticalIssueCard issue={issue} />
+                                                            </React.Fragment>
+                                                        ))}
                                                     </div>
                                                 </div>
                                             </div>
