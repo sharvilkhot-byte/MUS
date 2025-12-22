@@ -719,7 +719,7 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
     const [isSharing, setIsSharing] = useState(false);
 
     // Auth Blocking State
-    const [isLocked, setIsLocked] = useState(true);
+    const [isLocked, setIsLocked] = useState(!isSharedView);
 
     // Check session on mount REMOVED to enforce blocker every time
     // React.useEffect(() => {

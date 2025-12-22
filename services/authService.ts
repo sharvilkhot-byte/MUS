@@ -4,7 +4,62 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = 'https://sobtfbplbpvfqeubjxex.supabase.co';
 const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNvYnRmYnBsYnB2ZnFldWJqeGV4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkxNDgzMDYsImV4cCI6MjA3NDcyNDMwNn0.ewfxDwlapmRpfyvYD3ALb-WyL12ty1eP8nzKyrc66ho';
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+/**
+ * Update user profile (e.g. set password)
+ */
+export async function updateProfile(attributes: { password?: string; data?: any }) {
+    const { data, error } = await supabase.auth.updateUser(attributes);
+    return { data, error };
+}
+
+/**
+ * Sign up with email and password
+ */
+export async function signUp(email: string, password: string, data?: any): Promise<{ session: any; error: string | null }> {
+    try {
+        const { data: authData, error } = await supabase.auth.signUp({
+            email,
+            password,
+            options: {
+                data: data, // Save metadata like name, orgType
+            },
+        });
+
+        if (error) {
+            console.error('Error signing up:', error);
+            return { session: null, error: error.message };
+        }
+
+        return { session: authData.session, error: null };
+    } catch (err: any) {
+        console.error('Unexpected error signing up:', err);
+        return { session: null, error: err.message || 'Failed to sign up' };
+    }
+}
+
+/**
+ * Sign in with email and password
+ */
+export async function signIn(email: string, password: string): Promise<{ session: any; error: string | null }> {
+    try {
+        const { data, error } = await supabase.auth.signInWithPassword({
+            email,
+            password,
+        });
+
+        if (error) {
+            console.error('Error signing in:', error);
+            return { session: null, error: error.message };
+        }
+
+        return { session: data.session, error: null };
+    } catch (err: any) {
+        console.error('Unexpected error signing in:', err);
+        return { session: null, error: err.message || 'Failed to sign in' };
+    }
+}
 
 /**
  * Send OTP to email
