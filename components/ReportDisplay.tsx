@@ -16,6 +16,8 @@ import { ScoreDisplayCard } from './report/ScoreComponents';
 import { CriticalIssueCard } from './report/AuditCards';
 import { DetailedAuditView, DetailedAuditType } from './report/DetailedAuditView';
 import { StrategyAuditDisplay } from './report/StrategyComponents';
+import { useAuth } from '../contexts/AuthContext';
+import { UserBadge } from './UserBadge';
 
 // --- Supabase Client Details ---
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -89,7 +91,29 @@ export const ReportBody: React.FC<{ report: AnalysisReport, url: string, screens
 
             {/* Executive Summary Issues */}
             <div className="self-stretch force-page-break-before">
-                <h2 className="text-black text-base font-bold mt-8 mb-4 break-inside-avoid pdf-item pdf-section-title force-page-break-before">Executive Summary: Top 5 Most Impactful Issues</h2>
+                <h2 className="text-black text-base font-bold mt-8 mb-4 break-inside-avoid pdf-item pdf-section-title force-page-break-before">Executive Summary</h2>
+
+                {/* Executive Summary Text Card */}
+                {strategy?.ExecutiveSummary && (
+                    <div className="mb-6 p-6 bg-indigo-50 border border-indigo-100 rounded-xl relative overflow-hidden break-inside-avoid shadow-sm">
+                        <div className="absolute top-0 right-0 p-4 opacity-10">
+                            <svg className="w-24 h-24 text-indigo-600 transform rotate-12" fill="currentColor" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"></path><path d="M14 3v5h5M16 13H8M16 17H8M10 9H8"></path></svg>
+                        </div>
+                        <div className="relative z-10">
+                            <h3 className="text-indigo-900 font-bold text-lg mb-2 flex items-center gap-2">
+                                <span className="bg-indigo-600 text-white p-1 rounded">
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
+                                </span>
+                                Audit Overview
+                            </h3>
+                            <p className="text-indigo-900/80 leading-relaxed text-sm sm:text-base font-medium">
+                                {strategy.ExecutiveSummary}
+                            </p>
+                        </div>
+                    </div>
+                )}
+
+                <h2 className="text-black text-base font-bold mt-4 mb-4 break-inside-avoid pdf-item pdf-section-title">Top 5 Most Impactful Issues</h2>
                 <div className="flex flex-col self-stretch gap-3">
                     {allIssues.length > 0 ? (
                         allIssues.map((issue, index) => (
@@ -129,23 +153,25 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
     const [activeTab, setActiveTab] = useState('Executive Summary');
 
     const [isSharing, setIsSharing] = useState(false);
+    const { user, isLoading: isAuthLoading } = useAuth(); // Use Global Auth State
 
     // Auth Blocking State
-    // If it's a shared view, we DO NOT lock. Otherwise, we lock initially.
+    // Lock if NOT shared view AND NO user logged in
     const [isLocked, setIsLocked] = useState(!isSharedView);
 
-    // Check session on mount REMOVED to enforce blocker every time
-    // React.useEffect(() => {
-    //     getCurrentSession().then(session => {
-    //         if (session) {
-    //             setIsLocked(false);
-    //         }
-    //     });
-    // }, []);
+    // Effect to auto-unlock if user is logged in
+    React.useEffect(() => {
+        if (user && !isSharedView) {
+            setIsLocked(false);
+        }
+    }, [user, isSharedView]);
 
     const TABS = ['Executive Summary', 'UX Audit', 'Product Audit', 'Visual Design'];
 
     const { "UX Audit expert": ux, "Product Audit expert": product, "Visual Audit expert": visual, "Strategy Audit expert": strategy, Top5ContextualIssues } = report || {};
+
+    console.log('--- DEBUG STRATEGY DATA ---', strategy); // Debug logging
+
 
     const primaryScreenshot = screenshots.find(s => !s.isMobile);
     const primaryScreenshotSrc = primaryScreenshot?.url || (primaryScreenshot?.data ? `data:image/jpeg;base64,${primaryScreenshot.data}` : undefined);
@@ -445,8 +471,12 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
     return (
         <div>
             <header className="text-center my-8 sm:my-12 px-4">
-                {/* Report Header in UI - Always show Default Logo */}
-                <div className="flex flex-col items-center justify-center pt-8 pb-6 bg-slate-50">
+                <div className="flex flex-col items-center justify-center pt-8 pb-6 bg-slate-50 relative">
+                    {/* User Badge (Top Right) */}
+                    <div className="absolute top-4 right-4">
+                        <UserBadge />
+                    </div>
+
                     {isSharedView && whiteLabelLogo ? (
                         <img
                             src={whiteLabelLogo}
@@ -535,7 +565,7 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
 
                         {/* AUTH BLOCKER OVERLAY */}
                         <div className="relative">
-                            {isLocked && (
+                            {isLocked && !isAuthLoading && (
                                 <AuthBlocker
                                     isUnlocked={false}
                                     onUnlock={() => setIsLocked(false)}
@@ -571,6 +601,37 @@ export function ReportDisplay({ report, url, screenshots, auditId, onRunNewAudit
                                                 </div>
 
                                                 <div className="my-8"></div>
+
+                                                {/* Executive Summary Card */}
+                                                {strategy?.ExecutiveSummary && (
+                                                    <div className="mb-8 p-6 bg-gradient-to-br from-indigo-50 via-purple-50 to-blue-50 border-2 border-indigo-200 rounded-2xl relative overflow-hidden shadow-lg">
+                                                        {/* Decorative Background Elements */}
+                                                        <div className="absolute top-0 right-0 p-4 opacity-5">
+                                                            <svg className="w-32 h-32 text-indigo-600 transform rotate-12" fill="currentColor" viewBox="0 0 24 24">
+                                                                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"></path>
+                                                                <path d="M14 3v5h5M16 13H8M16 17H8M10 9H8"></path>
+                                                            </svg>
+                                                        </div>
+                                                        <div className="absolute bottom-0 left-0 p-4 opacity-5">
+                                                            <svg className="w-24 h-24 text-purple-600 transform -rotate-12" fill="currentColor" viewBox="0 0 24 24">
+                                                                <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                                            </svg>
+                                                        </div>
+                                                        <div className="relative z-10">
+                                                            <h3 className="text-indigo-900 font-bold text-xl mb-3 flex items-center gap-2">
+                                                                <span className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white p-2 rounded-lg shadow-md">
+                                                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                                                                    </svg>
+                                                                </span>
+                                                                Executive Summary
+                                                            </h3>
+                                                            <p className="text-indigo-900/90 leading-relaxed text-base font-medium whitespace-pre-line">
+                                                                {strategy.ExecutiveSummary}
+                                                            </p>
+                                                        </div>
+                                                    </div>
+                                                )}
 
                                                 {/* Context Capture */}
                                                 <DetailedAuditView auditData={strategy} auditType={'Strategic Foundation'} />

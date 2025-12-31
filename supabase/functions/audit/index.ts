@@ -60,7 +60,7 @@ This data was extracted from the page's HTML and indicates potential accessibili
   return prompt;
 };
 
-const getIndividualExpertSystemInstruction = (expertRole: string, mobileCaptureSucceeded: boolean, isMultiPage: boolean) => {
+const getIndividualExpertSystemInstruction = (expertRole: string, mobileCaptureSucceeded: boolean, isMultiPage: boolean, hasMultipleScreenshots: boolean) => {
   const instructions = [
     "**Infer Context**: Your first step is to analyze the provided text and screenshots to infer the website's type (e.g., SaaS, E-commerce, Portfolio) and primary purpose. Use this inferred context to guide the rest of your audit.",
     "**Dynamic Parameter Relevance**: First, analyze the website context. For each parameter in the schema, determine if it is relevant. If a parameter is NOT APPLICABLE (e.g., 'CheckoutPaymentFlow' for a portfolio site), you MUST assign it a `Score` of `0` and the `Analysis` field MUST briefly explain why it's not relevant (e.g., 'Not applicable as this is not an e-commerce site.'). Do not omit the parameter object.",
@@ -73,6 +73,10 @@ const getIndividualExpertSystemInstruction = (expertRole: string, mobileCaptureS
     "**Be Concise**: To ensure the report can be saved, keep your text for `Analysis`, `Recommendation`, and `KeyFinding` to a maximum of 3 sentences. Be direct and actionable.",
     "**Critical Issues Details**: For the 'Top 5 Critical Issues' list, you MUST populate the 'Analysis', 'Confidence', and 'KeyFinding' fields for every issue. Do not leave them empty. The 'Analysis' should briefly explain why this is a critical issue."
   ];
+  
+  if (hasMultipleScreenshots) {
+    instructions.push("**Multiple Screenshot Analysis**: You are receiving multiple screenshots. The FIRST screenshot is from the live website URL. Subsequent screenshots are user-uploaded images that may show additional pages, states, or specific issues the user wants analyzed. Your analysis MUST synthesize findings across ALL screenshots. When citing evidence, specify which screenshot you're referencing (e.g., 'In the live website screenshot...' or 'In the uploaded screenshot...'). Look for consistency and discrepancies across all provided images.");
+  }
   if (isMultiPage) {
     instructions.push("**Holistic, Site-Wide Analysis**: You have been provided with aggregated text from multiple pages of the site. Your audit should be holistic. Identify patterns and inconsistencies across pages. For citations, you MUST specify the page if the evidence is from a specific one (e.g., 'Citation: On the /about page, the header font differs from the homepage.'). If the issue is site-wide, state that (e.g., 'Citation: The footer is missing a privacy policy link on all analyzed pages.').");
   }
@@ -112,6 +116,7 @@ const getStrategySystemInstruction = () => `
 
   ### Analysis Guidelines ###
   - **Purpose Analysis**: CRITICAL - Focus strictly on the **purpose of the website itself**, not the broader mission of the company. Identify the primary actions the website wants users to take (e.g., "to sell products directly to consumers," "to generate leads for a service," "to inform readers about a specific topic"). The "Key objectives" should be a concise summary (2-3 sentences) of the specific goals that support the primary purpose.
+  - **Executive Summary (CRITICAL)**: Write an electrical, high-impact audit takeaway. **LENGTH CONSTRAINT**: You must write EQUIVALENT TO 5-6 LINES of text (approx. 80-100 words). **TONE**: Imagine you are a world-class consultant giving the "bottom line" to a CEO over coffee. Be conversational but razor-sharp. **BAN THESE WORDS**: "effectively," "leveraging," "positions itself," "aligns with," "showcases." **DO NOT** describe the site. **DO**: Jump straight into the insight. Example: "Your conversion path is broken because X is missing. While your visuals are strong, they don't solve the user's need for Y..." Make it sound human, specific, and impossible to ignore.,
 
   ### Persona Generation ###
   After completing the strategic analysis (Domain, Purpose, Target Audience), you MUST generate 3 realistic user personas based on your findings. Fill out all fields for each persona. For each persona, keep the \`UserNeedsBehavior\` and \`PainPointOpportunity\` descriptions to 3-4 concise sentences to ensure the report can be saved successfully.
@@ -239,6 +244,7 @@ const getSchemas = () => {
   const strategyAuditSchema = {
     type: Type.OBJECT,
     properties: {
+      ExecutiveSummary: { type: Type.STRING }, // NEW FIELD
       DomainAnalysis: {
         type: Type.OBJECT,
         properties: {
@@ -283,7 +289,7 @@ const getSchemas = () => {
         }
       }
     },
-    required: ['DomainAnalysis', 'PurposeAnalysis', 'TargetAudience', 'UserPersonas']
+    required: ['ExecutiveSummary', 'DomainAnalysis', 'PurposeAnalysis', 'TargetAudience', 'UserPersonas']
   };
 
   return { uxAuditSchema, productAuditSchema, visualAuditSchema, strategyAuditSchema, criticalIssueSchema };
@@ -345,16 +351,24 @@ async function retryWithBackoff(operation: any, retries = 10, initialDelay = 100
     }
   }
 }
-const callApi = async (ai: any, systemInstruction: string, contents: string, schema: any, imageBase64 = null, mimeType = 'image/png', mobileImageBase64 = null) => {
+const callApi = async (ai: any, systemInstruction: string, contents: string, schema: any, imageBase64Array: string[] = [], mimeType = 'image/png', mobileImageBase64 = null) => {
   const parts = [];
-  if (imageBase64) {
-    parts.push({
-      inlineData: {
-        mimeType,
-        data: imageBase64
+  
+  // Add all desktop screenshots (from URL scraping and/or uploads)
+  if (imageBase64Array && imageBase64Array.length > 0) {
+    for (const imageData of imageBase64Array) {
+      if (imageData) {
+        parts.push({
+          inlineData: {
+            mimeType,
+            data: imageData
+          }
+        });
       }
-    });
+    }
   }
+  
+  // Add mobile screenshot separately (if available)
   if (mobileImageBase64) {
     parts.push({
       inlineData: {
@@ -363,14 +377,16 @@ const callApi = async (ai: any, systemInstruction: string, contents: string, sch
       }
     });
   }
+  
   parts.push({
     text: contents
   });
-  const requestContents = imageBase64 || mobileImageBase64 ? {
+  
+  const requestContents = (imageBase64Array && imageBase64Array.length > 0) || mobileImageBase64 ? {
     parts
   } : contents;
   const apiCall = () => ai.models.generateContent({
-    model: "gemini-1.5-flash", // Corrected model name
+    model: "gemini-2.5-flash", // Using user-provided working model
     contents: requestContents,
     config: {
       systemInstruction,
@@ -680,13 +696,18 @@ serve(async (req: any) => {
             const { liveText } = body;
             return callApi(ai, getStrategySystemInstruction(), liveText, expertConfig.schema);
           } else {
-            const { url, screenshotBase64, mobileScreenshotBase64, liveText, performanceData, screenshotMimeType, performanceAnalysisError, animationData, accessibilityData } = body;
+            const { url, screenshotBase64, allScreenshotsBase64, mobileScreenshotBase64, liveText, performanceData, screenshotMimeType, performanceAnalysisError, animationData, accessibilityData } = body;
             const mobileCaptureSucceeded = !!mobileScreenshotBase64;
             const isMultiPage = liveText.includes("--- START CONTENT FROM");
-            const systemInstruction = getIndividualExpertSystemInstruction(expertConfig.role, mobileCaptureSucceeded, isMultiPage);
+            
+            // Use allScreenshotsBase64 if provided (array of all desktop screenshots), otherwise fallback to single screenshotBase64
+            const screenshotsArray = allScreenshotsBase64 || (screenshotBase64 ? [screenshotBase64] : []);
+            const hasMultipleScreenshots = screenshotsArray.length > 1;
+            
+            const systemInstruction = getIndividualExpertSystemInstruction(expertConfig.role, mobileCaptureSucceeded, isMultiPage, hasMultipleScreenshots);
             const contextPrompt = getWebsiteContextPrompt(url, performanceData, performanceAnalysisError, animationData, accessibilityData, isMultiPage);
             const fullContent = `${contextPrompt}\n### Live Website Text Content ###\n${liveText}`;
-            return callApi(ai, systemInstruction, fullContent, expertConfig.schema, screenshotBase64, screenshotMimeType, mobileScreenshotBase64);
+            return callApi(ai, systemInstruction, fullContent, expertConfig.schema, screenshotsArray, screenshotMimeType, mobileScreenshotBase64);
           }
         };
         const stream = handleSingleAnalysisStream(expertConfig.key, analysisFn);
@@ -750,7 +771,7 @@ ${strategyContext}
 ${JSON.stringify(allIssues, null, 2)}`;
           const schemas = getSchemas();
           const callContextRank = () => ai.models.generateContent({
-            model: "gemini-1.5-flash", // Corrected model name
+            model: "gemini-2.5-flash", // Corrected model name
             contents: contents,
             config: {
               systemInstruction,

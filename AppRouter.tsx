@@ -7,6 +7,7 @@ import { ReportDisplay } from './components/ReportDisplay';
 import { Logo } from './components/Logo';
 import { getSharedAudit } from './services/auditStorage';
 import { AnalysisReport, Screenshot } from './types';
+import { AuthProvider } from './contexts/AuthContext';
 
 // Shared Audit View Component
 function SharedAuditView() {
@@ -101,13 +102,15 @@ function SharedAuditView() {
 // Root component with routing
 function AppWithRouting() {
     return (
-        <BrowserRouter>
-            <Toaster position="top-center" />
-            <Routes>
-                <Route path="/" element={<App />} />
-                <Route path="/shared/:auditId" element={<SharedAuditView />} />
-            </Routes>
-        </BrowserRouter>
+        <AuthProvider>
+            <BrowserRouter>
+                <Toaster position="top-center" />
+                <Routes>
+                    <Route path="/" element={<App />} />
+                    <Route path="/shared/:auditId" element={<SharedAuditView />} />
+                </Routes>
+            </BrowserRouter>
+        </AuthProvider>
     );
 }
 
