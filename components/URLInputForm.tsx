@@ -110,10 +110,10 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
               <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Audits to Run ({queue.length})</h3>
               <div className="grid gap-2">
                 {queue.map((item, index) => (
-                  <div key={item.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                  <div key={item.id} className="flex items-center justify-between p-3 bg-white rounded-lg border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
                     <div className="flex items-center gap-3 overflow-hidden">
-                      <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 flex-shrink-0">
-                        <span className="text-xs font-bold">{index + 1}</span>
+                      <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 flex-shrink-0 text-[10px] font-bold border border-slate-200">
+                        {index + 1}
                       </div>
                       <div className="truncate">
                         <p className="text-sm font-medium text-slate-700 truncate">
@@ -132,7 +132,7 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
                     <button
                       type="button"
                       onClick={() => removeFromQueue(index)}
-                      className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+                      className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
