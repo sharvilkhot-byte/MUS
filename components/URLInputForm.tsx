@@ -33,17 +33,46 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
     inputs.forEach(input => {
       if (input.type === 'url' && input.url && input.url.trim().length > 0) {
         // Has URL
-        if (input.file) {
-          // Has both URL and screenshot - send both
-          validInputs.push({ id: input.id, type: 'url', url: input.url });
-          validInputs.push({ id: `${input.id}-upload`, type: 'upload', file: input.file });
+        if (input.files && input.files.length > 0) {
+          // Has both URL and multiple screenshots
+          // We can attach the files directly to the URL object or send separate upload objects
+          // Based on types, AuditInput can have 'files'. Let's aggregate them.
+          // IF the analyzer expects separate inputs for uploads vs url, we separate them.
+          // BUT, to associate them with THIS url, it's better to keep them together if the types allow.
+          // Looking at types.ts: AuditInput has 'url' AND 'files'. So we can send ONE object with both.
+
+          // However, existing logic (geminiService) might iterate linear inputs.
+          // If we want "Combined Audit", passing { type: 'url', url: '...', files: [...] } is best.
+          validInputs.push({
+            id: input.id,
+            type: 'url',
+            url: input.url,
+            files: input.files,
+            file: input.files[0] // Fallback
+          });
+        } else if (input.file) {
+          // Fallback single file
+          validInputs.push({
+            id: input.id,
+            type: 'url',
+            url: input.url,
+            files: [input.file],
+            file: input.file
+          });
         } else {
           // Only URL
           validInputs.push(input);
         }
+      } else if (input.files && input.files.length > 0) {
+        // Only screenshots (no URL)
+        validInputs.push({
+          id: input.id,
+          type: 'upload',
+          files: input.files,
+          file: input.files[0]
+        });
       } else if (input.file) {
-        // Only screenshot (no URL)
-        validInputs.push({ id: input.id, type: 'upload', file: input.file });
+        validInputs.push({ id: input.id, type: 'upload', file: input.file, files: [input.file] });
       }
     });
 
@@ -58,17 +87,28 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
     ));
   };
 
-  const handleFileChange = (id: string, file: File | null) => {
-    if (file) {
-      setInputs(prev => prev.map(item =>
-        item.id === id ? { ...item, file } : item
-      ));
-    } else {
-      // Remove file
-      setInputs(prev => prev.map(item =>
-        item.id === id ? { ...item, file: undefined } : item
-      ));
+  const handleFileChange = (id: string, newFiles: FileList | null) => {
+    if (newFiles && newFiles.length > 0) {
+      setInputs(prev => prev.map(item => {
+        if (item.id === id) {
+          // Append new files to existing ones (if any)
+          const currentFiles = item.files || [];
+          const updatedFiles = [...currentFiles, ...Array.from(newFiles)];
+          return { ...item, files: updatedFiles, file: updatedFiles[0] };
+        }
+        return item;
+      }));
     }
+  };
+
+  const removeFile = (itemId: string, fileIndex: number) => {
+    setInputs(prev => prev.map(item => {
+      if (item.id === itemId && item.files) {
+        const updatedFiles = item.files.filter((_, i) => i !== fileIndex);
+        return { ...item, files: updatedFiles, file: updatedFiles.length > 0 ? updatedFiles[0] : undefined };
+      }
+      return item;
+    }));
   };
 
   const toggleScreenshotUpload = (id: string) => {
@@ -76,9 +116,8 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
       const newSet = new Set(prev);
       if (newSet.has(id)) {
         newSet.delete(id);
-        // Clear file when collapsing
         setInputs(prevInputs => prevInputs.map(item =>
-          item.id === id ? { ...item, file: undefined } : item
+          item.id === id ? { ...item, file: undefined, files: [] } : item
         ));
       } else {
         newSet.add(id);
@@ -190,15 +229,39 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
                           <input
                             type="file"
                             accept="image/*"
-                            onChange={(e) => handleFileChange(input.id, e.target.files?.[0] || null)}
+                            multiple
+                            onChange={(e) => handleFileChange(input.id, e.target.files)}
                             className="block w-full text-xs text-slate-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-indigo-100 file:text-indigo-700 hover:file:bg-indigo-200 transition-colors"
                           />
-                          {input.file && (
+                          {/* File List */}
+                          {input.files && input.files.length > 0 ? (
+                            <div className="mt-2 space-y-1">
+                              {input.files.map((file, i) => (
+                                <div key={i} className="flex items-center justify-between text-xs text-indigo-700 bg-white/50 p-1 rounded border border-indigo-100">
+                                  <div className="flex items-center gap-1 truncate max-w-[200px]">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5 flex-shrink-0">
+                                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
+                                    </svg>
+                                    <span className="truncate">{file.name}</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => removeFile(input.id, i)}
+                                    className="p-0.5 hover:bg-red-100 hover:text-red-500 rounded text-slate-400"
+                                  >
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
+                                      <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : input.file && (
                             <p className="mt-1 text-xs text-indigo-700 flex items-center gap-1">
                               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
                                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
                               </svg>
-                              {input.file.name}
+                              <span className="truncate">{input.file.name}</span>
                             </p>
                           )}
                         </div>

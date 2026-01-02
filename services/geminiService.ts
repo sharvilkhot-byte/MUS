@@ -164,18 +164,32 @@ export const analyzeWebsiteStream = async (
           });
         }
 
-      } else if (input.type === 'upload' && input.fileData) {
+      } else if (input.type === 'upload') {
         // --- UPLOAD PROCESSING ---
-        onStatus(`Processing upload ${i + 1}/${inputs.length}...`);
+        // Support multiple files
+        if (input.filesData && input.filesData.length > 0) {
+          onStatus(`Processing uploads for item ${i + 1}...`);
+          input.filesData.forEach((base64Data, idx) => {
+             allScreenshots.push({
+              path: `upload-${i}-${idx}.png`,
+              data: base64Data,
+              isMobile: false
+            });
+          });
+          aggregatedLiveText += `\n\n--- CONTEXT FOR UPLOADS ${i + 1} ---\n(User Snapshots)\n\n`;
+          successfulAcquisitions++;
 
-        allScreenshots.push({
-          path: `upload-${i}.png`,
-          data: input.fileData,
-          isMobile: false
-        });
-
-        aggregatedLiveText += `\n\n--- CONTEXT FOR UPLOAD ${i + 1} ---\n(User Snapshot)\n\n`;
-        successfulAcquisitions++;
+        } else if (input.fileData) {
+          // Fallback single
+          onStatus(`Processing upload ${i + 1}/${inputs.length}...`);
+          allScreenshots.push({
+            path: `upload-${i}.png`,
+            data: input.fileData,
+            isMobile: false
+          });
+          aggregatedLiveText += `\n\n--- CONTEXT FOR UPLOAD ${i + 1} ---\n(User Snapshot)\n\n`;
+          successfulAcquisitions++;
+        }
       }
     }
 

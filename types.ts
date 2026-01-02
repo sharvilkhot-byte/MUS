@@ -41,7 +41,9 @@ export type AuditInputType = 'url' | 'upload';
 export interface AuditInput {
   type: AuditInputType;
   url?: string; // For type='url'
-  file?: File; // For type='upload' (Frontend)
+  file?: File; // For backward compatibility / single mode
+  files?: File[]; // For multiple uploads
   fileData?: string; // Base64 (Service)
+  filesData?: string[]; // Array of Base64 strings (Service)
   id: string; // Unique ID for React lists
 }

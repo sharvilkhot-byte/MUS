@@ -37,70 +37,86 @@ const App: React.FC = () => {
 
         const processedInputs: AuditInput[] = [];
 
-        // Validations & Conversions
-        for (const input of inputs) {
-            if (input.type === 'url') {
-                let normalized = input.url || '';
-                // Simple normalization
-                normalized = normalized.trim();
-                if (normalized && !/^https?:\/\//i.test(normalized)) {
-                    normalized = 'https://' + normalized;
-                }
+        // Helper to process files
+        const processFiles = async (files?: File[], singleFile?: File): Promise<string[]> => {
+            const filesToProcess = files && files.length > 0 ? files : (singleFile ? [singleFile] : []);
+            if (filesToProcess.length === 0) return [];
 
-                // Simple Validation
-                try {
-                    new URL(normalized);
-                } catch {
-                    setError(`Invalid URL format: "${input.url}"`);
-                    setIsLoading(false);
-                    return;
-                }
+            return Promise.all(filesToProcess.map(file =>
+                new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const result = reader.result?.toString().split(',')[1];
+                        if (result) resolve(result);
+                        else reject("Failed to process image.");
+                    };
+                    reader.onerror = () => reject("Failed to read file.");
+                    reader.readAsDataURL(file);
+                })
+            ));
+        };
 
-                processedInputs.push({ ...input, url: normalized });
+        try {
+            // Validations & Conversions
+            for (const input of inputs) {
+                const filesData = await processFiles(input.files, input.file);
 
-            } else if (input.type === 'upload') {
-                if (!input.file) {
-                    setError("Missing file for upload.");
-                    setIsLoading(false);
-                    return;
-                }
+                if (input.type === 'url') {
+                    if (!input.url) continue;
 
-                try {
-                    // Convert file to Base64
-                    const base64String = await new Promise<string>((resolve, reject) => {
-                        const reader = new FileReader();
-                        reader.onload = () => {
-                            const result = reader.result?.toString().split(',')[1];
-                            if (result) resolve(result);
-                            else reject("Failed to process image.");
-                        };
-                        reader.onerror = () => reject("Failed to read file.");
-                        reader.readAsDataURL(input.file!);
-                    });
+                    let normalized = input.url.trim();
+                    // Basic normalization
+                    if (!normalized.startsWith('http://') && !normalized.startsWith('https://')) {
+                        normalized = 'https://' + normalized;
+                    }
+
+                    // Simple Validation
+                    try {
+                        new URL(normalized);
+                    } catch {
+                        setError(`Invalid URL format: "${input.url}"`);
+                        setIsLoading(false);
+                        return;
+                    }
 
                     processedInputs.push({
                         ...input,
-                        fileData: base64String
+                        url: normalized,
+                        filesData: filesData.length > 0 ? filesData : undefined,
+                        fileData: filesData.length > 0 ? filesData[0] : undefined // Legacy fallback
                     });
-                } catch (e: any) {
-                    setError(`File Error: ${e.message || e}`);
-                    setIsLoading(false);
-                    return;
+
+                } else if (input.type === 'upload') {
+                    if (filesData.length === 0) {
+                        setError("Missing file for upload.");
+                        setIsLoading(false);
+                        return;
+                    }
+
+                    processedInputs.push({
+                        ...input,
+                        filesData: filesData,
+                        fileData: filesData[0] // Legacy fallback
+                    });
                 }
             }
-        }
 
-        if (processedInputs.length === 0) {
-            setError("No valid inputs provided.");
+            if (processedInputs.length === 0) {
+                setError("No valid inputs provided.");
+                setIsLoading(false);
+                return;
+            }
+
+            // Set 'submittedUrl' to first input for display
+            const firstInput = processedInputs[0];
+            setSubmittedUrl(firstInput.type === 'url' ? firstInput.url! : 'Manual Upload');
+
+            startAnalysis(processedInputs);
+
+        } catch (e: any) {
+            setError(`Error processing inputs: ${e.message || e}`);
             setIsLoading(false);
-            return;
         }
-
-        // Set 'submittedUrl' to first input for display
-        const firstInput = processedInputs[0];
-        setSubmittedUrl(firstInput.type === 'url' ? firstInput.url! : 'Manual Upload');
-
-        startAnalysis(processedInputs);
     }, []);
 
     const startAnalysis = (inputs: AuditInput[]) => {
