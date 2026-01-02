@@ -16,130 +16,82 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
   onWhiteLabelLogoChange,
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [inputs, setInputs] = useState<AuditInput[]>([
-    { id: '1', type: 'url', url: '' }
-  ]);
 
-  // Track which URL inputs have screenshot upload expanded
-  const [expandedScreenshots, setExpandedScreenshots] = useState<Set<string>>(new Set());
+  // Confirmed list of audits to run
+  const [queue, setQueue] = useState<AuditInput[]>([]);
+
+  // Current Input State
+  const [currentUrl, setCurrentUrl] = useState('');
+  const [currentFiles, setCurrentFiles] = useState<File[]>([]);
+  const [isScreenshotExpanded, setIsScreenshotExpanded] = useState(false);
+
+  const MAX_INPUTS = 5;
+
+  // --- Queue Management ---
+
+  const addToQueue = () => {
+    // Validate: Needs URL OR Files
+    const hasUrl = currentUrl && currentUrl.trim().length > 0;
+    const hasFiles = currentFiles.length > 0;
+
+    if (!hasUrl && !hasFiles) return;
+
+    const newInput: AuditInput = {
+      id: crypto.randomUUID(),
+      type: hasUrl ? 'url' : 'upload',
+      url: currentUrl,
+      files: currentFiles,
+      file: currentFiles[0] // Fallback
+    };
+
+    setQueue(prev => [...prev, newInput]);
+
+    // Clear Input
+    setCurrentUrl('');
+    setCurrentFiles([]);
+    setIsScreenshotExpanded(false);
+  };
+
+  const removeFromQueue = (index: number) => {
+    setQueue(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // --- Handlers ---
+
+  const handleFileChange = (newFiles: FileList | null) => {
+    if (newFiles && newFiles.length > 0) {
+      setCurrentFiles(prev => [...prev, ...Array.from(newFiles)]);
+    }
+  };
+
+  const removeCurrentFile = (index: number) => {
+    setCurrentFiles(prev => prev.filter((_, i) => i !== index));
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (isLoading) return;
 
-    // Collect all inputs with URL and/or screenshot
-    const validInputs: AuditInput[] = [];
+    // Combine Queue + Current Input (if valid)
+    const validInputs: AuditInput[] = [...queue];
 
-    inputs.forEach(input => {
-      if (input.type === 'url' && input.url && input.url.trim().length > 0) {
-        // Has URL
-        if (input.files && input.files.length > 0) {
-          // Has both URL and multiple screenshots
-          // We can attach the files directly to the URL object or send separate upload objects
-          // Based on types, AuditInput can have 'files'. Let's aggregate them.
-          // IF the analyzer expects separate inputs for uploads vs url, we separate them.
-          // BUT, to associate them with THIS url, it's better to keep them together if the types allow.
-          // Looking at types.ts: AuditInput has 'url' AND 'files'. So we can send ONE object with both.
+    const hasUrl = currentUrl && currentUrl.trim().length > 0;
+    const hasFiles = currentFiles.length > 0;
 
-          // However, existing logic (geminiService) might iterate linear inputs.
-          // If we want "Combined Audit", passing { type: 'url', url: '...', files: [...] } is best.
-          validInputs.push({
-            id: input.id,
-            type: 'url',
-            url: input.url,
-            files: input.files,
-            file: input.files[0] // Fallback
-          });
-        } else if (input.file) {
-          // Fallback single file
-          validInputs.push({
-            id: input.id,
-            type: 'url',
-            url: input.url,
-            files: [input.file],
-            file: input.file
-          });
-        } else {
-          // Only URL
-          validInputs.push(input);
-        }
-      } else if (input.files && input.files.length > 0) {
-        // Only screenshots (no URL)
+    if (hasUrl || hasFiles) {
+      if (queue.length < MAX_INPUTS) {
         validInputs.push({
-          id: input.id,
-          type: 'upload',
-          files: input.files,
-          file: input.files[0]
+          id: 'current',
+          type: hasUrl ? 'url' : 'upload',
+          url: currentUrl,
+          files: currentFiles,
+          file: currentFiles[0]
         });
-      } else if (input.file) {
-        validInputs.push({ id: input.id, type: 'upload', file: input.file, files: [input.file] });
       }
-    });
+    }
 
     if (validInputs.length > 0) {
       onAnalyze(validInputs);
-    }
-  };
-
-  const handleUrlChange = (id: string, value: string) => {
-    setInputs(prev => prev.map(item =>
-      item.id === id ? { ...item, url: value } : item
-    ));
-  };
-
-  const handleFileChange = (id: string, newFiles: FileList | null) => {
-    if (newFiles && newFiles.length > 0) {
-      setInputs(prev => prev.map(item => {
-        if (item.id === id) {
-          // Append new files to existing ones (if any)
-          const currentFiles = item.files || [];
-          const updatedFiles = [...currentFiles, ...Array.from(newFiles)];
-          return { ...item, files: updatedFiles, file: updatedFiles[0] };
-        }
-        return item;
-      }));
-    }
-  };
-
-  const removeFile = (itemId: string, fileIndex: number) => {
-    setInputs(prev => prev.map(item => {
-      if (item.id === itemId && item.files) {
-        const updatedFiles = item.files.filter((_, i) => i !== fileIndex);
-        return { ...item, files: updatedFiles, file: updatedFiles.length > 0 ? updatedFiles[0] : undefined };
-      }
-      return item;
-    }));
-  };
-
-  const toggleScreenshotUpload = (id: string) => {
-    setExpandedScreenshots(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(id)) {
-        newSet.delete(id);
-        setInputs(prevInputs => prevInputs.map(item =>
-          item.id === id ? { ...item, file: undefined, files: [] } : item
-        ));
-      } else {
-        newSet.add(id);
-      }
-      return newSet;
-    });
-  };
-
-  const addUrlInput = () => {
-    if (inputs.length < 5) {
-      setInputs(prev => [...prev, { id: crypto.randomUUID(), type: 'url', url: '' }]);
-    }
-  };
-
-  const removeInput = (id: string) => {
-    if (inputs.length > 1) {
-      setInputs(prev => prev.filter(item => item.id !== id));
-      setExpandedScreenshots(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(id);
-        return newSet;
-      });
     }
   };
 
@@ -150,197 +102,171 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
   return (
     <>
       <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
-        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+        <form onSubmit={handleSubmit} className="p-4 space-y-6">
 
-          <div className="space-y-4">
-            {inputs.map((input, index) => (
-              <div key={input.id} className="p-4 bg-slate-50 rounded-lg border border-slate-100 relative group">
-
-                {/* Remove Button */}
-                {inputs.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => removeInput(input.id)}
-                    className="absolute top-2 right-2 p-1.5 text-slate-400 hover:text-red-500 rounded-full hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
-                    aria-label="Remove item"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                )}
-
-                {/* URL Input */}
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="flex-shrink-0">
-                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
+          {/* 1. Queue List (Added Items) */}
+          {queue.length > 0 && (
+            <div className="space-y-2 mb-4">
+              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Audits to Run ({queue.length})</h3>
+              <div className="grid gap-2">
+                {queue.map((item, index) => (
+                  <div key={item.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100">
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 flex-shrink-0">
+                        <span className="text-xs font-bold">{index + 1}</span>
+                      </div>
+                      <div className="truncate">
+                        <p className="text-sm font-medium text-slate-700 truncate">
+                          {item.url || 'Manual Upload'}
+                        </p>
+                        {item.files && item.files.length > 0 && (
+                          <p className="text-xs text-slate-500 flex items-center gap-1">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3 h-3">
+                              <path fillRule="evenodd" d="M1 5.25A2.25 2.25 0 013.25 3h13.5A2.25 2.25 0 0119 5.25v9.5A2.25 2.25 0 0116.75 17H3.25A2.25 2.25 0 011 14.75v-9.5zm4.03 3.03a.75.75 0 00-1.06-1.06l-2.25 2.25a.75.75 0 000 1.06l2.25 2.25a.75.75 0 001.06-1.06l-.97-.97h6.19a.75.75 0 00.53-.22l.97-.97a.75.75 0 00-1.06-1.06l-.44.44H5.97l.97-.97zM17.22 8.28a.75.75 0 00-1.06-1.06l-2.25 2.25a.75.75 0 000 1.06l2.25 2.25a.75.75 0 001.06-1.06l-.97-.97h-2.19a.75.75 0 00-.53-.22l-.97-.97a.75.75 0 001.06-1.06l2.25-2.25z" clipRule="evenodd" />
+                            </svg>
+                            {item.files.length} Screenshot{item.files.length !== 1 ? 's' : ''} attached
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeFromQueue(index)}
+                      className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+                    >
                       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.916 17.916 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418" />
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                       </svg>
-                    </div>
+                    </button>
                   </div>
-                  <div className="flex-1">
-                    <label className="block text-xs font-medium text-slate-500 mb-1">Website URL</label>
-                    <input
-                      type="url"
-                      value={input.url}
-                      onChange={(e) => handleUrlChange(input.id, e.target.value)}
-                      placeholder="https://example.com"
-                      className="w-full p-2 bg-white border border-slate-200 rounded focus:outline-none focus:border-indigo-500 text-sm"
-                    />
-                  </div>
-                </div>
-
-                {/* Microcopy and Screenshot Toggle */}
-                <div className="ml-[52px] space-y-2">
-                  <p className="text-xs text-slate-500 flex items-center gap-1.5">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5 text-indigo-500">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 10-7.517 0c.85.493 1.509 1.333 1.509 2.316V18" />
-                    </svg>
-                    <span className="italic">Can't scrape? Also add screenshot of website</span>
-                  </p>
-
-                  {/* Toggle Screenshot Button */}
-                  <button
-                    type="button"
-                    onClick={() => toggleScreenshotUpload(input.id)}
-                    className="flex items-center gap-2 text-xs font-semibold text-indigo-600 hover:text-indigo-700 transition-colors"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
-                    </svg>
-                    {expandedScreenshots.has(input.id) ? 'Hide Screenshot Upload' : 'Add Screenshot (Optional)'}
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className={`w-3 h-3 transition-transform ${expandedScreenshots.has(input.id) ? 'rotate-180' : ''}`}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-                    </svg>
-                  </button>
-
-                  {/* Collapsible Screenshot Upload */}
-                  {expandedScreenshots.has(input.id) && (
-                    <div className="mt-3 p-3 bg-indigo-50 border border-indigo-100 rounded-lg space-y-2 transition-all duration-300 ease-in-out transform origin-top">
-                      <div className="flex items-start gap-2">
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 text-indigo-600 mt-0.5 flex-shrink-0">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
-                        </svg>
-                        <div className="flex-1">
-                          <label className="block text-xs font-semibold text-indigo-900 mb-1">
-                            Upload Full Page Screenshot
-                          </label>
-                          <input
-                            type="file"
-                            accept="image/*"
-                            multiple
-                            onChange={(e) => handleFileChange(input.id, e.target.files)}
-                            className="block w-full text-xs text-slate-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-indigo-100 file:text-indigo-700 hover:file:bg-indigo-200 transition-colors"
-                          />
-                          {/* File List */}
-                          {input.files && input.files.length > 0 ? (
-                            <div className="mt-2 space-y-1">
-                              {input.files.map((file, i) => (
-                                <div key={i} className="flex items-center justify-between text-xs text-indigo-700 bg-white/50 p-1 rounded border border-indigo-100">
-                                  <div className="flex items-center gap-1 truncate max-w-[200px]">
-                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5 flex-shrink-0">
-                                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
-                                    </svg>
-                                    <span className="truncate">{file.name}</span>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeFile(input.id, i)}
-                                    className="p-0.5 hover:bg-red-100 hover:text-red-500 rounded text-slate-400"
-                                  >
-                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
-                                      <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
-                                    </svg>
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                          ) : input.file && (
-                            <p className="mt-1 text-xs text-indigo-700 flex items-center gap-1">
-                              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5">
-                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clipRule="evenodd" />
-                              </svg>
-                              <span className="truncate">{input.file.name}</span>
-                            </p>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Instructions */}
-                      <div className="pt-2 border-t border-indigo-200 space-y-1 text-xs text-indigo-800">
-                        <p className="flex items-start gap-1.5">
-                          <span className="text-indigo-600 font-semibold">•</span>
-                          <span>Both URL and screenshot will be audited together</span>
-                        </p>
-                        <p className="flex items-start gap-1.5">
-                          <span className="text-indigo-600 font-semibold">•</span>
-                          <span>Helps when website can't be scraped automatically</span>
-                        </p>
-                        <p className="flex items-start gap-1.5">
-                          <span className="text-indigo-600 font-semibold">•</span>
-                          <span>Upload full-page screenshots for best results</span>
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </div>
+          )}
 
-          {/* Action Buttons */}
-          <div className="flex flex-col gap-6">
-
-            {/* Primary Actions Row (Add URL, White Label, Run Audit) */}
-            <div className="flex flex-col-reverse sm:flex-row sm:justify-between sm:items-center gap-4 pt-2 border-t border-slate-100">
-              <div className="flex items-center gap-3">
-                {inputs.length < 5 && (
-                  <button
-                    type="button"
-                    onClick={addUrlInput}
-                    disabled={isLoading}
-                    className="px-4 py-2 text-sm bg-blue-50 text-blue-700 border border-blue-200 font-semibold rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-2"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5"><path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" /></svg>
-                    Add URL
-                  </button>
-                )}
-
-                {whiteLabelLogo ? (
-                  <div className="relative group cursor-pointer inline-block" onClick={() => setIsModalOpen(true)}>
-                    <div className="h-9 px-3 bg-slate-100 rounded-lg flex items-center border border-indigo-100 hover:border-indigo-300 transition-colors">
-                      <img src={whiteLabelLogo} alt="Custom Logo" className="h-6 w-auto object-contain max-w-[100px]" />
-                      <div className="ml-2 pl-2 border-l border-slate-300">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-500"><path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" /><path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" /></svg>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setIsModalOpen(true)}
-                    disabled={isLoading}
-                    className="px-4 py-2 text-sm bg-white border border-slate-300 text-slate-700 font-semibold rounded-lg hover:bg-slate-50 transition-colors flex items-center gap-2"
-                  >
+          {/* 2. Single Input Form */}
+          {queue.length < MAX_INPUTS && (
+            <div className="p-4 bg-slate-50 rounded-lg border border-slate-100 relative group">
+              <div className="flex items-start gap-3">
+                <div className="flex-shrink-0 mt-1">
+                  <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.916 17.916 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418" />
                     </svg>
-                    White Label
-                  </button>
-                )}
-              </div>
+                  </div>
+                </div>
 
-              <button
-                type="submit"
-                disabled={isLoading || inputs.length === 0}
-                className="w-full sm:w-auto px-8 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-indigo-400 disabled:cursor-not-allowed transition-colors duration-200 shadow-md shadow-indigo-100"
-              >
-                {isLoading ? 'Analyzing...' : 'Run Audit'}
-              </button>
+                <div className="flex-1 space-y-3">
+                  {/* URL Field */}
+                  <div>
+                    <label className="block text-xs font-medium text-slate-500 mb-1">
+                      {queue.length > 0 ? 'Add Another Website URL' : 'Website URL'}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="url"
+                        value={currentUrl}
+                        onChange={(e) => setCurrentUrl(e.target.value)}
+                        placeholder="https://example.com"
+                        className="flex-1 p-2 bg-white border border-slate-200 rounded focus:outline-none focus:border-indigo-500 text-sm shadow-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={addToQueue}
+                        disabled={(!currentUrl && currentFiles.length === 0) || queue.length >= MAX_INPUTS}
+                        className="px-3 py-2 bg-indigo-50 text-indigo-600 text-sm font-semibold rounded hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
+                      >
+                        + Add
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Screenshot Toggle & Area */}
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setIsScreenshotExpanded(!isScreenshotExpanded)}
+                      className="flex items-center gap-2 text-xs font-semibold text-indigo-600 hover:text-indigo-700 transition-colors"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+                      </svg>
+                      {isScreenshotExpanded ? 'Hide Screenshot Upload' : 'Need to add screenshots?'}
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className={`w-3 h-3 transition-transform ${isScreenshotExpanded ? 'rotate-180' : ''}`}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                      </svg>
+                    </button>
+
+                    {isScreenshotExpanded && (
+                      <div className="mt-2 p-3 bg-indigo-50 border border-indigo-100 rounded-lg space-y-2 animate-in fade-in slide-in-from-top-1">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={(e) => handleFileChange(e.target.files)}
+                          className="block w-full text-xs text-slate-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-indigo-100 file:text-indigo-700 hover:file:bg-indigo-200 transition-colors"
+                        />
+                        {/* Current File List */}
+                        {currentFiles.length > 0 && (
+                          <div className="space-y-1 mt-2">
+                            {currentFiles.map((file, i) => (
+                              <div key={i} className="flex items-center justify-between text-xs text-indigo-700 bg-white/50 p-1 rounded border border-indigo-100">
+                                <span className="truncate max-w-[200px]">{file.name}</span>
+                                <button type="button" onClick={() => removeCurrentFile(i)} className="text-slate-400 hover:text-red-500">
+                                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4"><path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" /></svg>
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <p className="text-[10px] text-indigo-500 mt-1">* Adds to current item</p>
+                      </div>
+                    )}
+                  </div>
+
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Action Footer */}
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-between sm:items-center gap-4 pt-4 border-t border-slate-100">
+            {/* White Label */}
+            <div>
+              {whiteLabelLogo ? (
+                <div className="relative group cursor-pointer inline-block" onClick={() => setIsModalOpen(true)}>
+                  <div className="h-9 px-3 bg-slate-100 rounded-lg flex items-center border border-indigo-100 hover:border-indigo-300 transition-colors">
+                    <img src={whiteLabelLogo} alt="Custom Logo" className="h-6 w-auto object-contain max-w-[100px]" />
+                    <div className="ml-2 pl-2 border-l border-slate-300">
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4 text-slate-500"><path d="M5.433 13.917l1.262-3.155A4 4 0 017.58 9.42l6.92-6.918a2.121 2.121 0 013 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 01-.65-.65z" /><path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0010 3H4.75A2.75 2.75 0 002 5.75v9.5A2.75 2.75 0 004.75 18h9.5A2.75 2.75 0 0017 15.25V10a.75.75 0 00-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5z" /></svg>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(true)}
+                  disabled={isLoading}
+                  className="px-4 py-2 text-sm bg-white border border-slate-300 text-slate-700 font-semibold rounded-lg hover:bg-slate-50 transition-colors flex items-center gap-2"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                  </svg>
+                  White Label
+                </button>
+              )}
             </div>
 
+            {/* Analyze Button */}
+            <button
+              type="submit"
+              disabled={isLoading || (queue.length === 0 && !currentUrl && currentFiles.length === 0)}
+              className="w-full sm:w-auto px-8 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-indigo-400 disabled:cursor-not-allowed transition-colors duration-200 shadow-md shadow-indigo-100"
+            >
+              {isLoading ? 'Analyzing...' : queue.length > 0 ? `Run Audit (${queue.length + ((currentUrl || currentFiles.length > 0) ? 1 : 0)})` : 'Run Audit'}
+            </button>
           </div>
+
         </form>
       </div>
 
