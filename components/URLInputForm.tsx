@@ -27,14 +27,35 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
 
   const MAX_INPUTS = 5;
 
+  // --- Logic: Slot Counting ---
+  // Each URL counts as 1. Each File counts as 1.
+  const getSlotCount = (items: AuditInput[]) => {
+    return items.reduce((acc, item) => {
+      const urlCost = (item.type === 'url' && item.url) ? 1 : 0;
+      const fileCost = item.files ? item.files.length : (item.file ? 1 : 0);
+      return acc + urlCost + fileCost;
+    }, 0);
+  };
+
+  const usedSlotsInQueue = getSlotCount(queue);
+  const remainingSlots = MAX_INPUTS - usedSlotsInQueue;
+
   // --- Queue Management ---
 
   const addToQueue = () => {
-    // Validate: Needs URL OR Files
-    const hasUrl = currentUrl && currentUrl.trim().length > 0;
-    const hasFiles = currentFiles.length > 0;
+    // Current Input Cost
+    const currentUrlCost = (currentUrl && currentUrl.trim().length > 0) ? 1 : 0;
+    const currentFileCost = currentFiles.length;
+    const totalCurrentCost = currentUrlCost + currentFileCost;
 
-    if (!hasUrl && !hasFiles) return;
+    if (totalCurrentCost === 0) return;
+
+    if (totalCurrentCost > remainingSlots) {
+      alert(`Limit reached! You can only add ${remainingSlots} more items (URLs + Screenshots).`);
+      return;
+    }
+
+    const hasUrl = currentUrlCost > 0;
 
     const newInput: AuditInput = {
       id: crypto.randomUUID(),
@@ -60,7 +81,27 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
 
   const handleFileChange = (newFiles: FileList | null) => {
     if (newFiles && newFiles.length > 0) {
-      setCurrentFiles(prev => [...prev, ...Array.from(newFiles)]);
+      const currentUrlCost = (currentUrl && currentUrl.trim().length > 0) ? 1 : 0;
+      const alreadySelectedFiles = currentFiles.length;
+
+      // Calculate max files we can ADD right now
+      // Total Available = Remaining Slots (from Queue)
+      // Used by this form = URL (1 or 0) + Already Selected Files
+      const maxFilesAllowed = remainingSlots - currentUrlCost - alreadySelectedFiles;
+
+      if (maxFilesAllowed <= 0) {
+        alert('Max limit of 5 items reached. Cannot add more files.');
+        return;
+      }
+
+      const filesArray = Array.from(newFiles);
+      const filesToAdd = filesArray.slice(0, maxFilesAllowed);
+
+      if (filesArray.length > maxFilesAllowed) {
+        alert(`Limit reached. Only adding first ${maxFilesAllowed} file(s).`);
+      }
+
+      setCurrentFiles(prev => [...prev, ...filesToAdd]);
     }
   };
 
@@ -72,14 +113,15 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
     e.preventDefault();
     if (isLoading) return;
 
-    // Combine Queue + Current Input (if valid)
     const validInputs: AuditInput[] = [...queue];
 
-    const hasUrl = currentUrl && currentUrl.trim().length > 0;
-    const hasFiles = currentFiles.length > 0;
+    const currentUrlCost = (currentUrl && currentUrl.trim().length > 0) ? 1 : 0;
+    const currentFileCost = currentFiles.length;
+    const totalCurrentCost = currentUrlCost + currentFileCost;
 
-    if (hasUrl || hasFiles) {
-      if (queue.length < MAX_INPUTS) {
+    if (totalCurrentCost > 0) {
+      if (totalCurrentCost <= remainingSlots) {
+        const hasUrl = currentUrlCost > 0;
         validInputs.push({
           id: 'current',
           type: hasUrl ? 'url' : 'upload',
@@ -87,6 +129,9 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
           files: currentFiles,
           file: currentFiles[0]
         });
+      } else {
+        alert(`Cannot run audit: Exceeds limit of 5 items. You have ${remainingSlots} slots but tried to add ${totalCurrentCost}.`);
+        return;
       }
     }
 
@@ -99,6 +144,10 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
     onWhiteLabelLogoChange(logoData || null);
   };
 
+  // Calculate current ephemeral cost for UI
+  const currentInputCost = ((currentUrl && currentUrl.length > 0) ? 1 : 0) + currentFiles.length;
+  const currentTotal = usedSlotsInQueue + currentInputCost;
+
   return (
     <>
       <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
@@ -107,7 +156,11 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
           {/* 1. Queue List (Added Items) */}
           {queue.length > 0 && (
             <div className="space-y-2 mb-4">
-              <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Audits to Run ({queue.length})</h3>
+              <div className="flex justify-between items-center">
+                <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Audits Queue ({queue.length})</h3>
+                <span className="text-xs text-indigo-600 font-medium">Unique Items: {usedSlotsInQueue}/5</span>
+              </div>
+
               <div className="grid gap-2">
                 {queue.map((item, index) => (
                   <div key={item.id} className="flex items-center justify-between p-3 bg-white rounded-lg border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
@@ -144,8 +197,8 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
             </div>
           )}
 
-          {/* 2. Single Input Form */}
-          {queue.length < MAX_INPUTS && (
+          {/* 2. Single Input Form (Only show if we have remaining slots) */}
+          {remainingSlots > 0 && (
             <div className="p-4 bg-slate-50 rounded-lg border border-slate-100 relative group">
               <div className="flex items-start gap-3">
                 <div className="flex-shrink-0 mt-1">
@@ -159,8 +212,11 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
                 <div className="flex-1 space-y-3">
                   {/* URL Field */}
                   <div>
-                    <label className="block text-xs font-medium text-slate-500 mb-1">
-                      {queue.length > 0 ? 'Add Another Website URL' : 'Website URL'}
+                    <label className="flex justify-between text-xs font-medium text-slate-500 mb-1">
+                      <span>{queue.length > 0 ? 'Add Another Website URL' : 'Website URL'}</span>
+                      <span className={`${currentInputCost > remainingSlots ? 'text-red-500' : 'text-slate-400'}`}>
+                        Slots: {remainingSlots - currentInputCost} left
+                      </span>
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -173,7 +229,7 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
                       <button
                         type="button"
                         onClick={addToQueue}
-                        disabled={(!currentUrl && currentFiles.length === 0) || queue.length >= MAX_INPUTS}
+                        disabled={(!currentUrl && currentFiles.length === 0) || currentInputCost > remainingSlots}
                         className="px-3 py-2 bg-indigo-50 text-indigo-600 text-sm font-semibold rounded hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
                       >
                         + Add
@@ -204,7 +260,8 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
                           accept="image/*"
                           multiple
                           onChange={(e) => handleFileChange(e.target.files)}
-                          className="block w-full text-xs text-slate-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-indigo-100 file:text-indigo-700 hover:file:bg-indigo-200 transition-colors"
+                          disabled={remainingSlots - ((currentUrl ? 1 : 0) + currentFiles.length) <= 0}
+                          className="block w-full text-xs text-slate-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-indigo-100 file:text-indigo-700 hover:file:bg-indigo-200 transition-colors disabled:opacity-50"
                         />
                         {/* Current File List */}
                         {currentFiles.length > 0 && (
@@ -219,7 +276,7 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
                             ))}
                           </div>
                         )}
-                        <p className="text-[10px] text-indigo-500 mt-1">* Adds to current item</p>
+                        <p className="text-[10px] text-indigo-500 mt-1">* Adds to current item count</p>
                       </div>
                     )}
                   </div>
@@ -260,10 +317,10 @@ export const URLInputForm: React.FC<URLInputFormProps> = ({
             {/* Analyze Button */}
             <button
               type="submit"
-              disabled={isLoading || (queue.length === 0 && !currentUrl && currentFiles.length === 0)}
+              disabled={isLoading || (currentTotal === 0 && usedSlotsInQueue === 0)}
               className="w-full sm:w-auto px-8 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-indigo-400 disabled:cursor-not-allowed transition-colors duration-200 shadow-md shadow-indigo-100"
             >
-              {isLoading ? 'Analyzing...' : queue.length > 0 ? `Run Audit (${queue.length + ((currentUrl || currentFiles.length > 0) ? 1 : 0)})` : 'Run Audit'}
+              {isLoading ? 'Analyzing...' : `Run Audit (${currentTotal})`}
             </button>
           </div>
 
