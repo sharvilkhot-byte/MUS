@@ -137,7 +137,7 @@ export const useReportPdf = ({ report, url, screenshots, whiteLabelLogo, default
 
             // 7. Pagination Logic (Your Smart Logic)
             const allItems = Array.from(sourceContainer.querySelectorAll('.pdf-item')) as HTMLElement[];
-            
+
             // Filter nested items
             const items = allItems.filter(item => {
                 let parent = item.parentElement;
@@ -187,7 +187,7 @@ export const useReportPdf = ({ report, url, screenshots, whiteLabelLogo, default
             for (let i = 0; i < pages.length; i++) {
                 const page = pages[i];
                 const canvas = await html2canvas(page, {
-                    scale: 3, // High Quality
+                    scale: 2, // Quality vs Size Balance (2 is Retina, 3 is 4k+)
                     useCORS: true,
                     logging: false,
                     backgroundColor: '#ffffff',
@@ -198,7 +198,7 @@ export const useReportPdf = ({ report, url, screenshots, whiteLabelLogo, default
                         });
                     }
                 });
-                const imgData = canvas.toDataURL('image/jpeg', 0.98);
+                const imgData = canvas.toDataURL('image/jpeg', 0.80);
                 const imgWidth = pdfWidth - (MARGIN * 2);
                 const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
